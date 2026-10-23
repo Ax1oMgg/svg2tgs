@@ -1,0 +1,687 @@
+//! Перевод нормализованного дерева usvg в слои Lottie.
+//!
+//! Все координаты «запекаются»: каждая точка сразу пересчитывается
+//! в пиксели канваса, а группы Lottie получают тождественное преобразование.
+//! Так результат не зависит от того, как разные плееры раскладывают матрицы.
+//!
+//! Обрезка (`clipPath`) в Lottie делается масками слоя, поэтому элементы
+//! с разной обрезкой попадают в разные слои; остальное — в один слой.
+
+use usvg::{
+    BlendMode, FillRule, Group, LineCap, LineJoin, Node, Paint, PaintOrder, Path, SpreadMethod,
+    Transform,
+};
+
+use crate::geometry::{is_similarity, map, mean_scale, path_to_beziers};
+use crate::lottie::{
+    Bezier, Dash, Gradient, GradientStops, GroupTransform, Line, Mask, Num, Rounder, Shape, Static,
+    FILL_RULE_EVENODD, FILL_RULE_NONZERO,
+};
+use crate::report::{Warning, WarningCode};
+
+/// Слой в процессе сборки: элементы в порядке документа (снизу вверх).
+pub struct LayerDraft {
+    key: Vec<usize>,
+    pub masks: Vec<Mask>,
+    /// Прозрачность всего слоя, 0–1.
+    pub opacity: f64,
+    pub items: Vec<Shape>,
+}
+
+/// Контекст обхода, наследуемый вниз по дереву.
+#[derive(Clone)]
+struct Ctx {
+    matrix: Transform,
+    /// Множитель прозрачности для заливок и обводок внутри текущего слоя.
+    opacity: f64,
+    /// Идентификаторы активных обрезок и прозрачных групп —
+    /// по ним элементы делятся на слои.
+    layer_key: Vec<usize>,
+    /// Маски активных обрезок.
+    masks: Vec<(usize, Vec<Bezier>)>,
+    /// Прозрачность слоя, если элементы внутри прозрачной группы.
+    layer_opacity: Option<f64>,
+}
+
+pub struct Converter {
+    round: Rounder,
+    /// Округление цветов и долей: 3 знака достаточно для 8-битного цвета.
+    round_color: Rounder,
+    pub layers: Vec<LayerDraft>,
+    pub warnings: Vec<Warning>,
+    next_layer_id: usize,
+}
+
+impl Converter {
+    pub fn new(decimals: u8) -> Self {
+        Self {
+            round: Rounder::new(decimals),
+            round_color: Rounder::new(3),
+            layers: Vec::new(),
+            warnings: Vec::new(),
+            next_layer_id: 0,
+        }
+    }
+
+    /// Обходит дерево, начиная с корня, с матрицей вписывания в канвас.
+    pub fn run(&mut self, root: &Group, fit: Transform) {
+        let ctx = Ctx {
+            matrix: fit,
+            opacity: 1.0,
+            layer_key: Vec::new(),
+            masks: Vec::new(),
+            layer_opacity: None,
+        };
+        self.walk_group_children(root, &ctx);
+    }
+
+    /// Есть ли хоть один нарисованный элемент.
+    pub fn is_empty(&self) -> bool {
+        self.layers.iter().all(|l| l.items.is_empty())
+    }
+
+    fn warn(&mut self, code: WarningCode, id: &str) {
+        let w = Warning {
+            code,
+            element_id: (!id.is_empty()).then(|| id.to_string()),
+        };
+        if !self.warnings.contains(&w) {
+            self.warnings.push(w);
+        }
+    }
+
+    fn walk_group_children(&mut self, g: &Group, ctx: &Ctx) {
+        for node in g.children() {
+            match node {
+                Node::Group(child) => self.walk_group(child, ctx),
+                Node::Path(p) => self.draw_path(p, ctx),
+                Node::Image(img) => self.warn(WarningCode::ImageRemoved, img.id()),
+                Node::Text(text) => {
+                    let flat = text.flattened();
+                    if flat.has_children() {
+                        self.warn(WarningCode::TextConvertedToPaths, text.id());
+                        self.walk_group(flat, ctx);
+                    } else {
+                        self.warn(WarningCode::TextDropped, text.id());
+                    }
+                }
+            }
+        }
+    }
+
+    fn walk_group(&mut self, g: &Group, parent: &Ctx) {
+        let mut ctx = parent.clone();
+        ctx.matrix = parent.matrix.pre_concat(g.transform());
+        let group_opacity = g.opacity().get() as f64;
+        if group_opacity <= 0.0 || ctx.opacity <= 0.0 {
+            return;
+        }
+        // Прозрачность группы в SVG применяется к группе целиком: перекрытия
+        // внутри неё не темнеют. Если просто умножить её на прозрачность
+        // каждого элемента, перекрытия потемнеют. Поэтому группа с несколькими
+        // элементами выносится в отдельный слой с прозрачностью слоя —
+        // rlottie смешивает такой слой честно. Вложить слой в слой без
+        // прекомпозиций нельзя, поэтому внутри такого слоя — умножение.
+        if group_opacity < 1.0 && ctx.layer_opacity.is_none() && paint_count(g, 2) >= 2 {
+            ctx.layer_key.push(self.new_layer_id());
+            ctx.layer_opacity = Some(ctx.opacity * group_opacity);
+            ctx.opacity = 1.0;
+        } else {
+            ctx.opacity *= group_opacity;
+        }
+
+        // Один фильтр обычно состоит из нескольких примитивов (тень из Figma —
+        // это смещение, размытие, цвет и смешивание), поэтому на фильтр
+        // выдаётся одно замечание с самым узнаваемым эффектом.
+        for filter in g.filters() {
+            let names: Vec<&str> = filter
+                .primitives()
+                .iter()
+                .map(|p| filter_name(p.kind()))
+                .collect();
+            let main = ["drop_shadow", "blur"]
+                .into_iter()
+                .find(|n| names.contains(n))
+                .or_else(|| names.first().copied())
+                .unwrap_or("filter");
+            self.warn(
+                WarningCode::FilterRemoved {
+                    filter: main.to_string(),
+                },
+                label(g),
+            );
+        }
+        if g.mask().is_some() {
+            self.warn(WarningCode::MaskRemoved, label(g));
+        }
+        if g.blend_mode() != BlendMode::Normal {
+            let mode = format!("{:?}", g.blend_mode()).to_lowercase();
+            self.warn(WarningCode::BlendModeIgnored { mode }, label(g));
+        }
+
+        if let Some(clip) = g.clip_path() {
+            self.push_clip(clip, &mut ctx);
+        }
+
+        self.walk_group_children(g, &ctx);
+    }
+
+    /// Добавляет обрезку в контекст: её кривые становятся масками слоя.
+    fn new_layer_id(&mut self) -> usize {
+        self.next_layer_id += 1;
+        self.next_layer_id
+    }
+
+    fn push_clip(&mut self, clip: &usvg::ClipPath, ctx: &mut Ctx) {
+        let m = ctx.matrix.pre_concat(clip.transform());
+        let mut beziers = Vec::new();
+        self.collect_clip_paths(clip.root(), m, &mut beziers);
+
+        let level_id = self.new_layer_id();
+        ctx.layer_key.push(level_id);
+        ctx.masks.push((level_id, beziers));
+
+        if let Some(inner) = clip.clip_path() {
+            self.push_clip(inner, ctx);
+        }
+    }
+
+    fn collect_clip_paths(&mut self, g: &Group, m: Transform, out: &mut Vec<Bezier>) {
+        for node in g.children() {
+            match node {
+                Node::Group(child) => {
+                    if child.clip_path().is_some() {
+                        self.warn(WarningCode::ClipApproximated, child.id());
+                    }
+                    self.collect_clip_paths(child, m.pre_concat(child.transform()), out);
+                }
+                Node::Path(p) if p.is_visible() => {
+                    out.extend(path_to_beziers(p.data(), &m, &self.round));
+                }
+                Node::Text(t) => {
+                    let flat = t.flattened();
+                    self.collect_clip_paths(flat, m.pre_concat(flat.transform()), out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Маски слоя для набора обрезок: первый уровень — объединение его
+    /// кривых, каждый следующий — пересечение. Пересечение с объединением
+    /// нескольких кривых в Lottie не выражается — берётся приближение.
+    fn build_masks(&mut self, levels: &[(usize, Vec<Bezier>)]) -> Vec<Mask> {
+        let mut masks = Vec::new();
+        for (n, (_, beziers)) in levels.iter().enumerate() {
+            if beziers.is_empty() {
+                // Пустая обрезка скрывает всё — пустая маска даёт тот же эффект.
+                masks.push(Mask::new(
+                    if n == 0 { "a" } else { "i" },
+                    Bezier {
+                        c: true,
+                        i: vec![],
+                        o: vec![],
+                        v: vec![],
+                    },
+                ));
+                continue;
+            }
+            if n > 0 && beziers.len() > 1 {
+                self.warn(WarningCode::ClipApproximated, "");
+            }
+            for b in beziers {
+                let mode = if n == 0 { "a" } else { "i" };
+                masks.push(Mask::new(mode, b.clone()));
+            }
+        }
+        masks
+    }
+
+    fn draw_path(&mut self, p: &Path, ctx: &Ctx) {
+        if !p.is_visible() {
+            return;
+        }
+        let m = ctx.matrix;
+        let beziers = path_to_beziers(p.data(), &m, &self.round);
+        if beziers.is_empty() {
+            return;
+        }
+
+        // У отрезка нет площади: заливка ничего не рисует, только занимает место.
+        let has_area = beziers.iter().any(|b| {
+            b.v.len() > 2
+                || b.i
+                    .iter()
+                    .chain(&b.o)
+                    .any(|t| t[0].0 != 0.0 || t[1].0 != 0.0)
+        });
+        let fill = p
+            .fill()
+            .filter(|_| has_area)
+            .and_then(|f| self.fill_shape(f, ctx, p.id()));
+
+        // Отрезки нулевой длины со скруглённым или квадратным концом в SVG
+        // рисуются точкой — так в иконках делают точки (Lucide и др.).
+        // rlottie такие концы не рисует, поэтому точки заменяются заливкой.
+        let (dots, beziers): (Vec<Bezier>, Vec<Bezier>) =
+            beziers.into_iter().partition(is_zero_length);
+        let dots_group = p
+            .stroke()
+            .filter(|_| !dots.is_empty())
+            .and_then(|s| self.dots_group(&dots, s, ctx, p.id()));
+
+        let stroke = p
+            .stroke()
+            .filter(|_| !beziers.is_empty())
+            .and_then(|s| self.stroke_shape(s, ctx, p.id()));
+        if fill.is_none() && stroke.is_none() {
+            if let Some(g) = dots_group {
+                self.push_item(g, ctx);
+            }
+            return;
+        }
+
+        let mut it: Vec<Shape> = beziers
+            .into_iter()
+            .map(|b| Shape::Path { ks: Static::new(b) })
+            .collect();
+        // В Lottie стиль, стоящий раньше в списке, рисуется поверх.
+        let (top, bottom) = match p.paint_order() {
+            PaintOrder::FillAndStroke => (stroke, fill),
+            PaintOrder::StrokeAndFill => (fill, stroke),
+        };
+        it.extend(top);
+        it.extend(bottom);
+        it.push(Shape::Transform(GroupTransform::default()));
+
+        let group = Shape::Group {
+            nm: (!p.id().is_empty()).then(|| p.id().to_string()),
+            it,
+        };
+        self.push_item(group, ctx);
+        if let Some(g) = dots_group {
+            self.push_item(g, ctx);
+        }
+    }
+
+    /// Точки из отрезков нулевой длины: круг (round) или квадрат (square)
+    /// со стороной, равной толщине обводки, залитый её цветом.
+    fn dots_group(
+        &mut self,
+        dots: &[Bezier],
+        s: &usvg::Stroke,
+        ctx: &Ctx,
+        id: &str,
+    ) -> Option<Shape> {
+        let cap = s.linecap();
+        if cap == LineCap::Butt {
+            return None;
+        }
+        let o = self.opacity(s.opacity().get(), ctx);
+        if o.k_value() <= 0.0 {
+            return None;
+        }
+        let m = ctx.matrix;
+        let half = s.width().get() as f64 * mean_scale(&m) / 2.0;
+        // Квадратный конец повёрнут вдоль оси x пользовательской системы.
+        let len = ((m.sx as f64).powi(2) + (m.ky as f64).powi(2))
+            .sqrt()
+            .max(f64::EPSILON);
+        let axis = [m.sx as f64 / len, m.ky as f64 / len];
+
+        let mut it: Vec<Shape> = dots
+            .iter()
+            .map(|d| {
+                let c = [d.v[0][0].0, d.v[0][1].0];
+                let b = match cap {
+                    LineCap::Square => square(c, half, axis, &self.round),
+                    _ => circle(c, half, &self.round),
+                };
+                Shape::Path { ks: Static::new(b) }
+            })
+            .collect();
+        it.push(match self.paint(s.paint(), ctx, id) {
+            PaintOut::Solid(c) => Shape::Fill {
+                c: Static::new(c),
+                o,
+                r: FILL_RULE_NONZERO,
+            },
+            PaintOut::Gradient(g) => Shape::GradientFill {
+                o,
+                r: FILL_RULE_NONZERO,
+                g,
+            },
+        });
+        it.push(Shape::Transform(GroupTransform::default()));
+        Some(Shape::Group {
+            nm: (!id.is_empty()).then(|| id.to_string()),
+            it,
+        })
+    }
+
+    fn push_item(&mut self, item: Shape, ctx: &Ctx) {
+        let same_layer = self.layers.last().is_some_and(|l| l.key == ctx.layer_key);
+        if !same_layer {
+            let masks = self.build_masks(&ctx.masks);
+            self.layers.push(LayerDraft {
+                key: ctx.layer_key.clone(),
+                masks,
+                opacity: ctx.layer_opacity.unwrap_or(1.0),
+                items: Vec::new(),
+            });
+        }
+        self.layers.last_mut().unwrap().items.push(item);
+    }
+
+    fn opacity(&self, paint_opacity: f32, ctx: &Ctx) -> Static<Num> {
+        Static::new(
+            self.round_color
+                .num(paint_opacity as f64 * ctx.opacity * 100.0),
+        )
+    }
+
+    fn fill_shape(&mut self, f: &usvg::Fill, ctx: &Ctx, id: &str) -> Option<Shape> {
+        let o = self.opacity(f.opacity().get(), ctx);
+        if o.k_value() <= 0.0 {
+            return None;
+        }
+        let r = match f.rule() {
+            FillRule::NonZero => FILL_RULE_NONZERO,
+            FillRule::EvenOdd => FILL_RULE_EVENODD,
+        };
+        Some(match self.paint(f.paint(), ctx, id) {
+            PaintOut::Solid(c) => Shape::Fill {
+                c: Static::new(c),
+                o,
+                r,
+            },
+            PaintOut::Gradient(g) => Shape::GradientFill { o, r, g },
+        })
+    }
+
+    fn stroke_shape(&mut self, s: &usvg::Stroke, ctx: &Ctx, id: &str) -> Option<Shape> {
+        let o = self.opacity(s.opacity().get(), ctx);
+        if o.k_value() <= 0.0 {
+            return None;
+        }
+        let m = ctx.matrix;
+        if !is_similarity(&m) {
+            self.warn(WarningCode::StrokeApproximated, id);
+        }
+        let scale = mean_scale(&m);
+        let width = s.width().get() as f64 * scale;
+        if width <= 0.0 {
+            return None;
+        }
+
+        let lj = match s.linejoin() {
+            LineJoin::Miter | LineJoin::MiterClip => 1,
+            LineJoin::Round => 2,
+            LineJoin::Bevel => 3,
+        };
+        let mut d = Vec::new();
+        if let Some(dashes) = s.dasharray() {
+            for pair in dashes.chunks(2) {
+                d.push(Dash {
+                    n: "d",
+                    v: Static::new(self.round.num(pair[0] as f64 * scale)),
+                });
+                if let Some(gap) = pair.get(1) {
+                    d.push(Dash {
+                        n: "g",
+                        v: Static::new(self.round.num(*gap as f64 * scale)),
+                    });
+                }
+            }
+            d.push(Dash {
+                n: "o",
+                v: Static::new(self.round.num(s.dashoffset() as f64 * scale)),
+            });
+        }
+        let line = Line {
+            w: Static::new(self.round.num(width)),
+            lc: match s.linecap() {
+                LineCap::Butt => 1,
+                LineCap::Round => 2,
+                LineCap::Square => 3,
+            },
+            lj,
+            ml: (lj == 1).then(|| self.round.num(s.miterlimit().get() as f64)),
+            d,
+        };
+
+        Some(match self.paint(s.paint(), ctx, id) {
+            PaintOut::Solid(c) => Shape::Stroke {
+                c: Static::new(c),
+                o,
+                line,
+            },
+            PaintOut::Gradient(g) => Shape::GradientStroke { o, g, line },
+        })
+    }
+
+    fn color(&self, c: usvg::Color) -> [Num; 4] {
+        let ch = |v: u8| self.round_color.num(v as f64 / 255.0);
+        [ch(c.red), ch(c.green), ch(c.blue), Num(1.0)]
+    }
+
+    fn paint(&mut self, paint: &Paint, ctx: &Ctx, id: &str) -> PaintOut {
+        match paint {
+            Paint::Color(c) => PaintOut::Solid(self.color(*c)),
+            Paint::Pattern(_) => {
+                self.warn(WarningCode::PatternReplaced, id);
+                PaintOut::Solid(self.color(usvg::Color::new_rgb(128, 128, 128)))
+            }
+            Paint::LinearGradient(lg) => {
+                let m = ctx.matrix.pre_concat(lg.transform());
+                if lg.spread_method() != SpreadMethod::Pad {
+                    self.warn(WarningCode::GradientApproximated, id);
+                }
+                let s = map(&m, pt(lg.x1(), lg.y1()));
+                let e = linear_gradient_end(&m, s, lg.x2() - lg.x1(), lg.y2() - lg.y1());
+                PaintOut::Gradient(Gradient {
+                    t: 1,
+                    s: Static::new(self.round.pt(s)),
+                    e: Static::new(self.round.pt(e)),
+                    g: self.stops(lg.stops()),
+                    h: None,
+                    a: None,
+                })
+            }
+            Paint::RadialGradient(rg) => {
+                let m = ctx.matrix.pre_concat(rg.transform());
+                if !is_similarity(&m)
+                    || rg.spread_method() != SpreadMethod::Pad
+                    || rg.fr().get() > 0.0
+                {
+                    self.warn(WarningCode::GradientApproximated, id);
+                }
+                let r = rg.r().get();
+                let c = map(&m, pt(rg.cx(), rg.cy()));
+                let e = map(&m, pt(rg.cx() + r, rg.cy()));
+                let f = map(&m, pt(rg.fx(), rg.fy()));
+                let radius = dist(c, e);
+                let (h, a) = if radius > 0.0 && dist(c, f) > 1e-6 {
+                    let h = (dist(c, f) / radius * 100.0).min(99.0);
+                    let a = angle_deg(c, f) - angle_deg(c, e);
+                    (
+                        Some(Static::new(self.round.num(h))),
+                        Some(Static::new(self.round.num(a))),
+                    )
+                } else {
+                    (None, None)
+                };
+                PaintOut::Gradient(Gradient {
+                    t: 2,
+                    s: Static::new(self.round.pt(c)),
+                    e: Static::new(self.round.pt(e)),
+                    g: self.stops(rg.stops()),
+                    h,
+                    a,
+                })
+            }
+        }
+    }
+
+    fn stops(&self, stops: &[usvg::Stop]) -> GradientStops {
+        let mut k = Vec::with_capacity(stops.len() * 6);
+        for s in stops {
+            let [r, g, b, _] = self.color(s.color());
+            k.extend([self.round_color.num(s.offset().get() as f64), r, g, b]);
+        }
+        if stops.iter().any(|s| s.opacity().get() < 1.0) {
+            for s in stops {
+                k.push(self.round_color.num(s.offset().get() as f64));
+                k.push(self.round_color.num(s.opacity().get() as f64));
+            }
+        }
+        GradientStops {
+            p: stops.len(),
+            k: Static::new(k),
+        }
+    }
+}
+
+/// Подпуть, все точки и касательные которого совпадают, — отрезок нулевой длины.
+fn is_zero_length(b: &Bezier) -> bool {
+    let first = b.v[0];
+    b.v.iter()
+        .all(|v| v[0].0 == first[0].0 && v[1].0 == first[1].0)
+        && b.i
+            .iter()
+            .chain(&b.o)
+            .all(|t| t[0].0 == 0.0 && t[1].0 == 0.0)
+}
+
+/// Окружность радиуса `r` из четырёх кубических кривых.
+fn circle(c: [f64; 2], r: f64, round: &Rounder) -> Bezier {
+    const K: f64 = 0.552_284_749_830_793_6;
+    let k = r * K;
+    let v = [
+        [c[0], c[1] - r],
+        [c[0] + r, c[1]],
+        [c[0], c[1] + r],
+        [c[0] - r, c[1]],
+    ];
+    let o = [[k, 0.0], [0.0, k], [-k, 0.0], [0.0, -k]];
+    Bezier {
+        c: true,
+        v: v.iter().map(|p| round.pt(*p)).collect(),
+        i: o.iter().map(|t| round.pt([-t[0], -t[1]])).collect(),
+        o: o.iter().map(|t| round.pt(*t)).collect(),
+    }
+}
+
+/// Квадрат с половиной стороны `h`, повёрнутый вдоль единичного вектора `axis`.
+fn square(c: [f64; 2], h: f64, axis: [f64; 2], round: &Rounder) -> Bezier {
+    let (ux, uy) = (axis[0] * h, axis[1] * h);
+    let (vx, vy) = (-uy, ux);
+    let v = [
+        [c[0] - ux - vx, c[1] - uy - vy],
+        [c[0] + ux - vx, c[1] + uy - vy],
+        [c[0] + ux + vx, c[1] + uy + vy],
+        [c[0] - ux + vx, c[1] - uy + vy],
+    ];
+    Bezier {
+        c: true,
+        v: v.iter().map(|p| round.pt(*p)).collect(),
+        i: vec![[Num(0.0); 2]; 4],
+        o: vec![[Num(0.0); 2]; 4],
+    }
+}
+
+enum PaintOut {
+    Solid([Num; 4]),
+    Gradient(Gradient),
+}
+
+fn pt(x: f32, y: f32) -> usvg::tiny_skia_path::Point {
+    usvg::tiny_skia_path::Point::from_xy(x, y)
+}
+
+/// Конечная точка линейного градиента после преобразования `m`.
+///
+/// Просто перенести обе точки нельзя: при растяжении или перекосе линии
+/// одинакового цвета перестают быть перпендикулярны отрезку s→e, а Lottie
+/// считает именно так. Значение градиента — линейная функция точки,
+/// g(q) = (q − s′)·u, где u = A⁻ᵀ·d / |d|² (A — линейная часть `m`,
+/// d — вектор градиента). Lottie даёт ту же функцию при e = s′ + u / |u|².
+fn linear_gradient_end(m: &Transform, s: [f64; 2], dx: f32, dy: f32) -> [f64; 2] {
+    let (dx, dy) = (dx as f64, dy as f64);
+    let len2 = dx * dx + dy * dy;
+    let (a, b, c, d) = (m.sx as f64, m.kx as f64, m.ky as f64, m.sy as f64);
+    let det = a * d - b * c;
+    if len2 == 0.0 || det.abs() < 1e-12 {
+        return s;
+    }
+    // A = [[a, b], [c, d]] (x′ = a·x + b·y), A⁻ᵀ = 1/det · [[d, −c], [−b, a]].
+    let ux = (d * dx - c * dy) / det / len2;
+    let uy = (-b * dx + a * dy) / det / len2;
+    let u2 = ux * ux + uy * uy;
+    [s[0] + ux / u2, s[1] + uy / u2]
+}
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+fn angle_deg(from: [f64; 2], to: [f64; 2]) -> f64 {
+    (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
+}
+
+/// Сколько заливок и обводок внутри группы (считает до `limit`).
+/// Заливка и обводка одного элемента тоже перекрываются, поэтому
+/// элемент с обоими считается за два.
+fn paint_count(g: &Group, limit: usize) -> usize {
+    let mut n = 0;
+    for node in g.children() {
+        n += match node {
+            Node::Path(p) if p.is_visible() => {
+                p.fill().is_some() as usize + p.stroke().is_some() as usize
+            }
+            Node::Group(child) => paint_count(child, limit - n.min(limit)),
+            Node::Text(t) => paint_count(t.flattened(), limit - n.min(limit)),
+            _ => 0,
+        };
+        if n >= limit {
+            break;
+        }
+    }
+    n
+}
+
+/// Имя группы для замечаний: её `id`, а если его нет — `id` первого
+/// дочернего элемента (usvg переносит `id` элемента с фильтром внутрь).
+fn label(g: &Group) -> &str {
+    if !g.id().is_empty() {
+        return g.id();
+    }
+    g.children()
+        .iter()
+        .map(|n| n.id())
+        .find(|id| !id.is_empty())
+        .unwrap_or("")
+}
+
+/// Короткое имя эффекта фильтра для замечания.
+fn filter_name(kind: &usvg::filter::Kind) -> &'static str {
+    use usvg::filter::Kind;
+    match kind {
+        Kind::GaussianBlur(_) => "blur",
+        Kind::DropShadow(_) => "drop_shadow",
+        Kind::Offset(_) => "offset",
+        Kind::Blend(_) => "blend",
+        Kind::ColorMatrix(_) => "color_matrix",
+        Kind::ComponentTransfer(_) => "component_transfer",
+        Kind::Composite(_) => "composite",
+        Kind::ConvolveMatrix(_) => "convolve_matrix",
+        Kind::DiffuseLighting(_) | Kind::SpecularLighting(_) => "lighting",
+        Kind::DisplacementMap(_) => "displacement_map",
+        Kind::Flood(_) => "flood",
+        Kind::Image(_) => "image",
+        Kind::Merge(_) => "merge",
+        Kind::Morphology(_) => "morphology",
+        Kind::Tile(_) => "tile",
+        Kind::Turbulence(_) => "turbulence",
+    }
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#1b1f24" stroke-width="2" stroke-linecap="round">
+  <!-- Точки из отрезков нулевой длины, как в Lucide: rlottie их не рисует,
+       конвертер заменяет их кругами (round) и квадратами (square) -->
+  <line x1="6" y1="12" x2="18" y2="12"/>
+  <line x1="12" y1="7" x2="12" y2="7"/>
+  <path d="M12 17h0"/>
+  <path d="M4 4z" stroke-linecap="square"/>
+  <path d="M20 4h0" stroke-linecap="butt"/>
+</svg>

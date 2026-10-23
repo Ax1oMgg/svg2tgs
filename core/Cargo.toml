@@ -9,6 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+flate2 = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+usvg = "0.48"
+
+[dev-dependencies]
+flate2 = "1"
+serde_json.workspace = true
+

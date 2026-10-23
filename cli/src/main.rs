@@ -1,10 +1,12 @@
 //! svg2tgs — командная строка.
 //!
-//! Этап 0: разбор аргументов и сбор входных файлов. Сама конвертация
-//! подключается вместе с ядром на этапе 1, отчёт и пакетный режим — на этапе 4.
+//! Конвертирует SVG-файлы и папки в .tgs и печатает замечания по-русски.
+//! Подробный отчёт и расширенные настройки — этап 4.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+mod messages;
 
 use clap::{Parser, ValueEnum};
 use svg2tgs_core::{Options, Preset};
@@ -77,6 +79,19 @@ fn collect_inputs(inputs: &[PathBuf], recursive: bool) -> std::io::Result<Vec<Pa
     Ok(files)
 }
 
+fn convert_one(
+    src: &Path,
+    out_dir: &Path,
+    options: &Options,
+) -> Result<(PathBuf, svg2tgs_core::Conversion), String> {
+    let svg = std::fs::read(src).map_err(|e| format!("не удалось прочитать файл: {e}"))?;
+    let conv = svg2tgs_core::convert(&svg, options).map_err(|e| messages::error(&e))?;
+    let name = src.file_stem().unwrap_or_default();
+    let dst = out_dir.join(name).with_extension("tgs");
+    std::fs::write(&dst, &conv.tgs).map_err(|e| format!("не удалось записать результат: {e}"))?;
+    Ok((dst, conv))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let options = Options {
@@ -96,20 +111,42 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let mut failed = 0;
+    if let Err(e) = std::fs::create_dir_all(&cli.output) {
+        eprintln!("Не удалось создать папку {}: {e}", cli.output.display());
+        return ExitCode::from(1);
+    }
+
+    let (mut ok, mut failed) = (0, 0);
     for file in &files {
-        let result = std::fs::read(file)
-            .map_err(|e| e.to_string())
-            .and_then(|svg| svg2tgs_core::convert(&svg, &options).map_err(|e| e.to_string()));
-        match result {
-            Ok(conv) => println!("OK   {} ({} байт)", file.display(), conv.tgs_bytes()),
+        match convert_one(file, &cli.output, &options) {
+            Ok((dst, conv)) => {
+                ok += 1;
+                let mark = if conv
+                    .warnings
+                    .iter()
+                    .any(|w| w.code.severity() == svg2tgs_core::Severity::Warning)
+                {
+                    "⚠"
+                } else {
+                    "✓"
+                };
+                println!(
+                    "{mark} {} → {} ({:.1} КБ)",
+                    file.display(),
+                    dst.display(),
+                    conv.tgs_bytes() as f64 / 1024.0
+                );
+                for w in &conv.warnings {
+                    println!("    · {}", messages::warning(w));
+                }
+            }
             Err(e) => {
-                eprintln!("FAIL {}: {e}", file.display());
                 failed += 1;
+                eprintln!("✗ {}: {e}", file.display());
             }
         }
     }
-    let _ = &cli.output;
+    println!("\nГотово: {ok} успешно, {failed} с ошибкой.");
 
     if failed > 0 {
         ExitCode::from(2)

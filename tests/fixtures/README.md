@@ -20,5 +20,8 @@
 | `clip-path.svg` | `clipPath` | Обрезка по кругу |
 | `filter-blur.svg` | `feGaussianBlur` | Размытие убрано, замечание `filter_removed` для `shadow-shape` |
 | `shapes-basic.svg` | `rect rx`, `circle`, `ellipse`, `polygon`, `polyline`, `line` | Все фигуры на месте |
+| `dots.svg` | Отрезки нулевой длины с `round`/`square`/`butt` | Точки — залитые круг и квадрат; `butt` ничего не рисует |
+| `shared-start.svg` | Подпуть начинается в конце предыдущего (`…Z m0 0 …`) | Подпути не склеиваются в rlottie |
+| `pill.svg` | `rect` с `rx` = половине высоты | Ровные полукруги без искажений в rlottie |
 | `invalid.svg` | Не SVG | Ошибка `invalid_svg` |
 | `empty.svg` | Ничего видимого | Ошибка `empty` |
