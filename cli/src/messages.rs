@@ -29,9 +29,6 @@ pub fn warning(w: &Warning) -> String {
             "сложная вложенная обрезка передана приближённо".to_string()
         }
         WarningCode::GradientApproximated => "градиент передан приближённо".to_string(),
-        WarningCode::StrokeApproximated => {
-            "обводка под неравномерным растяжением передана с одинаковой толщиной".to_string()
-        }
     };
     match &w.element_id {
         Some(id) => format!("{text} (элемент «{id}»)"),

@@ -1,0 +1,27 @@
+[package]
+name = "svg2tgs-render"
+description = "Рендер для превью и проверок: TGS через rlottie (движок Telegram), SVG через resvg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+build = "build.rs"
+links = "rlottie"
+
+[features]
+# По умолчанию собирается rlottie от Samsung (MIT). С этим флагом — форк
+# Telegram Desktop (LGPL-2.1), тот же движок, что в клиенте Telegram.
+# Подробности и выбор — render/vendor/README.md.
+telegram-rlottie = []
+
+[dependencies]
+svg2tgs-core.workspace = true
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
+flate2 = "1"
+thiserror.workspace = true
+
+[build-dependencies]
+cc = "1.2"

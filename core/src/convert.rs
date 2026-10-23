@@ -14,7 +14,7 @@ use usvg::{
 
 use crate::geometry::{is_similarity, map, mean_scale, path_to_beziers};
 use crate::lottie::{
-    Bezier, Dash, Gradient, GradientStops, GroupTransform, Line, Mask, Num, Rounder, Shape, Static,
+    Bezier, Gradient, GradientStops, GroupTransform, Line, Mask, Num, Rounder, Shape, Static,
     FILL_RULE_EVENODD, FILL_RULE_NONZERO,
 };
 use crate::report::{Warning, WarningCode};
@@ -242,13 +242,14 @@ impl Converter {
             return;
         }
         let m = ctx.matrix;
-        let beziers = path_to_beziers(p.data(), &m, &self.round);
-        if beziers.is_empty() {
+        let id = p.id();
+        let base = path_to_beziers(p.data(), &m, &self.round);
+        if base.is_empty() {
             return;
         }
 
         // У отрезка нет площади: заливка ничего не рисует, только занимает место.
-        let has_area = beziers.iter().any(|b| {
+        let has_area = base.iter().any(|b| {
             b.v.len() > 2
                 || b.i
                     .iter()
@@ -258,49 +259,119 @@ impl Converter {
         let fill = p
             .fill()
             .filter(|_| has_area)
-            .and_then(|f| self.fill_shape(f, ctx, p.id()));
+            .and_then(|f| self.fill_shape(f, ctx, id));
+        let stroke = match p.stroke() {
+            Some(s) => self.stroke_out(p, s, ctx),
+            None => StrokeOut::None,
+        };
 
-        // Отрезки нулевой длины со скруглённым или квадратным концом в SVG
-        // рисуются точкой — так в иконках делают точки (Lucide и др.).
-        // rlottie такие концы не рисует, поэтому точки заменяются заливкой.
-        let (dots, beziers): (Vec<Bezier>, Vec<Bezier>) =
-            beziers.into_iter().partition(is_zero_length);
-        let dots_group = p
-            .stroke()
-            .filter(|_| !dots.is_empty())
-            .and_then(|s| self.dots_group(&dots, s, ctx, p.id()));
+        // В Lottie стиль, стоящий раньше в списке, рисуется поверх;
+        // в документе (и в `push_item`) — наоборот, позже значит выше.
+        let stroke_on_top = p.paint_order() == PaintOrder::FillAndStroke;
+        let mut stroke_groups: Vec<Shape> = Vec::new();
+        let mut shared: Option<(Vec<Bezier>, Shape)> = None;
+        match stroke {
+            StrokeOut::None => {}
+            StrokeOut::Lines {
+                lines,
+                dots,
+                style,
+                same_as_fill,
+            } => {
+                if let Some(style) = style.map(|s| *s) {
+                    if same_as_fill {
+                        shared = Some((lines, style));
+                    } else {
+                        stroke_groups.push(group(id, lines, vec![style]));
+                    }
+                }
+                if let Some(s) = p.stroke().filter(|_| !dots.is_empty()) {
+                    if let Some(g) = self.dots_group(&dots, s, ctx, id) {
+                        stroke_groups.push(g);
+                    }
+                }
+            }
+            StrokeOut::Outline(outline) => {
+                if let Some(s) = p.stroke() {
+                    let f =
+                        self.paint_fill(s.paint(), s.opacity().get(), FILL_RULE_NONZERO, ctx, id);
+                    if let Some(f) = f {
+                        stroke_groups.push(group(id, outline, vec![f]));
+                    }
+                }
+            }
+        }
 
-        let stroke = p
-            .stroke()
-            .filter(|_| !beziers.is_empty())
-            .and_then(|s| self.stroke_shape(s, ctx, p.id()));
-        if fill.is_none() && stroke.is_none() {
-            if let Some(g) = dots_group {
+        if let Some((lines, style)) = shared {
+            // Одна геометрия — одна группа с обоими стилями.
+            let styles: Vec<Shape> = if stroke_on_top {
+                std::iter::once(style).chain(fill).collect()
+            } else {
+                fill.into_iter().chain(std::iter::once(style)).collect()
+            };
+            let g = group(id, lines, styles);
+            self.push_item(g, ctx);
+            for g in stroke_groups {
                 self.push_item(g, ctx);
             }
             return;
         }
 
-        let mut it: Vec<Shape> = beziers
-            .into_iter()
-            .map(|b| Shape::Path { ks: Static::new(b) })
-            .collect();
-        // В Lottie стиль, стоящий раньше в списке, рисуется поверх.
-        let (top, bottom) = match p.paint_order() {
-            PaintOrder::FillAndStroke => (stroke, fill),
-            PaintOrder::StrokeAndFill => (fill, stroke),
+        let fill_group = fill.map(|f| {
+            let geometry = base.into_iter().filter(|b| !is_zero_length(b)).collect();
+            group(id, geometry, vec![f])
+        });
+        let ordered: Vec<Shape> = if stroke_on_top {
+            fill_group.into_iter().chain(stroke_groups).collect()
+        } else {
+            stroke_groups.into_iter().chain(fill_group).collect()
         };
-        it.extend(top);
-        it.extend(bottom);
-        it.push(Shape::Transform(GroupTransform::default()));
-
-        let group = Shape::Group {
-            nm: (!p.id().is_empty()).then(|| p.id().to_string()),
-            it,
-        };
-        self.push_item(group, ctx);
-        if let Some(g) = dots_group {
+        for g in ordered {
             self.push_item(g, ctx);
+        }
+    }
+
+    /// Готовит обводку.
+    ///
+    /// - Пунктир нарезается здесь, а не в плеере: rlottie неточно меряет
+    ///   длину кривых, и на дугах штрихи «уплывают».
+    /// - Под неравномерным растяжением (`scale(2 1)`, перекос) толщина линии
+    ///   в SVG разная в разных направлениях, а rlottie умеет только одинаковую.
+    ///   Такая обводка превращается в залитый контур, построенный в исходных
+    ///   координатах, — после растяжения он совпадает с SVG.
+    /// - Отрезки нулевой длины со скруглённым или квадратным концом в SVG
+    ///   рисуются точкой (точки в иконках, бусины в пунктире «0 6»);
+    ///   rlottie их не рисует, они уходят в `dots`.
+    fn stroke_out(&mut self, p: &Path, s: &usvg::Stroke, ctx: &Ctx) -> StrokeOut {
+        let m = ctx.matrix;
+        let resolution = mean_scale(&m).max(1.0) as f32;
+        let dashed = match dash_path(p.data(), s, resolution) {
+            Dashing::Solid => None,
+            Dashing::Dashed(path) => Some(path),
+            Dashing::Invisible => return StrokeOut::None,
+        };
+        let source = dashed.as_ref().unwrap_or(p.data());
+
+        if !is_similarity(&m) {
+            return match source.stroke(&s.to_tiny_skia(), resolution) {
+                Some(outline) => StrokeOut::Outline(path_to_beziers(&outline, &m, &self.round)),
+                None => StrokeOut::None,
+            };
+        }
+
+        let (dots, lines): (Vec<Bezier>, Vec<Bezier>) = path_to_beziers(source, &m, &self.round)
+            .into_iter()
+            .partition(is_zero_length);
+        let style = if lines.is_empty() {
+            None
+        } else {
+            self.stroke_shape(s, ctx, p.id()).map(Box::new)
+        };
+        StrokeOut::Lines {
+            lines,
+            dots,
+            style,
+            same_as_fill: dashed.is_none(),
         }
     }
 
@@ -315,10 +386,6 @@ impl Converter {
     ) -> Option<Shape> {
         let cap = s.linecap();
         if cap == LineCap::Butt {
-            return None;
-        }
-        let o = self.opacity(s.opacity().get(), ctx);
-        if o.k_value() <= 0.0 {
             return None;
         }
         let m = ctx.matrix;
@@ -340,18 +407,7 @@ impl Converter {
                 Shape::Path { ks: Static::new(b) }
             })
             .collect();
-        it.push(match self.paint(s.paint(), ctx, id) {
-            PaintOut::Solid(c) => Shape::Fill {
-                c: Static::new(c),
-                o,
-                r: FILL_RULE_NONZERO,
-            },
-            PaintOut::Gradient(g) => Shape::GradientFill {
-                o,
-                r: FILL_RULE_NONZERO,
-                g,
-            },
-        });
+        it.push(self.paint_fill(s.paint(), s.opacity().get(), FILL_RULE_NONZERO, ctx, id)?);
         it.push(Shape::Transform(GroupTransform::default()));
         Some(Shape::Group {
             nm: (!id.is_empty()).then(|| id.to_string()),
@@ -381,15 +437,27 @@ impl Converter {
     }
 
     fn fill_shape(&mut self, f: &usvg::Fill, ctx: &Ctx, id: &str) -> Option<Shape> {
-        let o = self.opacity(f.opacity().get(), ctx);
-        if o.k_value() <= 0.0 {
-            return None;
-        }
         let r = match f.rule() {
             FillRule::NonZero => FILL_RULE_NONZERO,
             FillRule::EvenOdd => FILL_RULE_EVENODD,
         };
-        Some(match self.paint(f.paint(), ctx, id) {
+        self.paint_fill(f.paint(), f.opacity().get(), r, ctx, id)
+    }
+
+    /// Заливка краской `paint`: сплошной цвет или градиент.
+    fn paint_fill(
+        &mut self,
+        paint: &Paint,
+        opacity: f32,
+        r: u8,
+        ctx: &Ctx,
+        id: &str,
+    ) -> Option<Shape> {
+        let o = self.opacity(opacity, ctx);
+        if o.k_value() <= 0.0 {
+            return None;
+        }
+        Some(match self.paint(paint, ctx, id) {
             PaintOut::Solid(c) => Shape::Fill {
                 c: Static::new(c),
                 o,
@@ -404,11 +472,7 @@ impl Converter {
         if o.k_value() <= 0.0 {
             return None;
         }
-        let m = ctx.matrix;
-        if !is_similarity(&m) {
-            self.warn(WarningCode::StrokeApproximated, id);
-        }
-        let scale = mean_scale(&m);
+        let scale = mean_scale(&ctx.matrix);
         let width = s.width().get() as f64 * scale;
         if width <= 0.0 {
             return None;
@@ -419,25 +483,6 @@ impl Converter {
             LineJoin::Round => 2,
             LineJoin::Bevel => 3,
         };
-        let mut d = Vec::new();
-        if let Some(dashes) = s.dasharray() {
-            for pair in dashes.chunks(2) {
-                d.push(Dash {
-                    n: "d",
-                    v: Static::new(self.round.num(pair[0] as f64 * scale)),
-                });
-                if let Some(gap) = pair.get(1) {
-                    d.push(Dash {
-                        n: "g",
-                        v: Static::new(self.round.num(*gap as f64 * scale)),
-                    });
-                }
-            }
-            d.push(Dash {
-                n: "o",
-                v: Static::new(self.round.num(s.dashoffset() as f64 * scale)),
-            });
-        }
         let line = Line {
             w: Static::new(self.round.num(width)),
             lc: match s.linecap() {
@@ -447,7 +492,6 @@ impl Converter {
             },
             lj,
             ml: (lj == 1).then(|| self.round.num(s.miterlimit().get() as f64)),
-            d,
         };
 
         Some(match self.paint(s.paint(), ctx, id) {
@@ -542,6 +586,20 @@ impl Converter {
     }
 }
 
+/// Группа Lottie: кривые, стили и тождественное преобразование.
+fn group(id: &str, beziers: Vec<Bezier>, styles: Vec<Shape>) -> Shape {
+    let mut it: Vec<Shape> = beziers
+        .into_iter()
+        .map(|b| Shape::Path { ks: Static::new(b) })
+        .collect();
+    it.extend(styles);
+    it.push(Shape::Transform(GroupTransform::default()));
+    Shape::Group {
+        nm: (!id.is_empty()).then(|| id.to_string()),
+        it,
+    }
+}
+
 /// Подпуть, все точки и касательные которого совпадают, — отрезок нулевой длины.
 fn is_zero_length(b: &Bezier) -> bool {
     let first = b.v[0];
@@ -587,6 +645,48 @@ fn square(c: [f64; 2], h: f64, axis: [f64; 2], round: &Rounder) -> Bezier {
         v: v.iter().map(|p| round.pt(*p)).collect(),
         i: vec![[Num(0.0); 2]; 4],
         o: vec![[Num(0.0); 2]; 4],
+    }
+}
+
+/// Обводка, подготовленная к записи в Lottie.
+enum StrokeOut {
+    None,
+    /// Линии со стилем обводки и точки из отрезков нулевой длины.
+    /// `same_as_fill` — геометрия совпадает с заливкой (нет пунктира),
+    /// оба стиля можно положить в одну группу.
+    Lines {
+        lines: Vec<Bezier>,
+        dots: Vec<Bezier>,
+        style: Option<Box<Shape>>,
+        same_as_fill: bool,
+    },
+    /// Обводка, превращённая в залитый контур.
+    Outline(Vec<Bezier>),
+}
+
+enum Dashing {
+    Solid,
+    Dashed(usvg::tiny_skia_path::Path),
+    /// Все штрихи попали в промежутки.
+    Invisible,
+}
+
+/// Нарезает пунктир в исходных координатах. Вырожденный пунктир
+/// (сумма длин 0) по правилам SVG рисуется сплошной линией.
+fn dash_path(data: &usvg::tiny_skia_path::Path, s: &usvg::Stroke, resolution: f32) -> Dashing {
+    let Some(array) = s.dasharray() else {
+        return Dashing::Solid;
+    };
+    let mut array = array.to_vec();
+    if array.len() % 2 == 1 {
+        array.extend_from_within(..);
+    }
+    let Some(dash) = usvg::tiny_skia_path::StrokeDash::new(array, s.dashoffset()) else {
+        return Dashing::Solid;
+    };
+    match data.dash(&dash, resolution) {
+        Some(path) => Dashing::Dashed(path),
+        None => Dashing::Invisible,
     }
 }
 

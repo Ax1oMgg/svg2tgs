@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["core", "cli", "app/src-tauri"]
-default-members = ["core", "cli"]
+members = ["core", "render", "cli", "app/src-tauri"]
+default-members = ["core", "render", "cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ authors = ["Ax1oMgg"]
 
 [workspace.dependencies]
 svg2tgs-core = { path = "core" }
+svg2tgs-render = { path = "render" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

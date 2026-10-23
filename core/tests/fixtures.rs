@@ -124,7 +124,7 @@ fn every_fixture_produces_valid_tgs_or_expected_error() {
         checked += 1;
     }
     assert_eq!(
-        checked, 19,
+        checked, 21,
         "количество тестовых SVG изменилось — обновите тест"
     );
 }
@@ -501,4 +501,41 @@ fn pill_has_no_duplicate_vertices() {
             assert_ne!(w[0], w[1], "соседние вершины-дубликаты");
         }
     }
+}
+
+#[test]
+fn dashes_are_cut_into_segments() {
+    let out = run("dashed-curves.svg");
+    // Пунктир нарезан конвертером: у обводок нет параметров пунктира Lottie,
+    // а штрихов много — по подпути на каждый.
+    for st in all(&out.json, "st") {
+        assert!(st.get("d").is_none(), "пунктир не должен уходить в плеер");
+    }
+    assert!(all(&out.json, "sh").len() > 20);
+    // Бусины — круги, залитые цветом обводки.
+    let red_fill = all(&out.json, "fl")
+        .into_iter()
+        .any(|f| hex(&f["c"]) == "#e8505b");
+    assert!(red_fill, "нет бусин");
+}
+
+#[test]
+fn stretched_stroke_becomes_outline() {
+    let out = run("stretched-stroke.svg");
+    assert!(
+        all(&out.json, "st").is_empty(),
+        "обводка должна стать контуром"
+    );
+    let fills: Vec<String> = all(&out.json, "fl").iter().map(|f| hex(&f["c"])).collect();
+    assert!(fills.contains(&"#1b1f24".to_string()), "контур обводки");
+    assert!(fills.contains(&"#f5b400".to_string()), "заливка");
+    // Обводка поверх заливки: её группа идёт в Lottie раньше.
+    let groups = all(&out.json, "gr");
+    let pos = |c: &str| {
+        groups
+            .iter()
+            .position(|g| hex(&all(g, "fl")[0]["c"]) == c)
+            .unwrap()
+    };
+    assert!(pos("#1b1f24") < pos("#f5b400"));
 }

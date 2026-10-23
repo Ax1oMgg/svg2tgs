@@ -21,6 +21,8 @@ use usvg::Transform;
 
 pub use options::{Background, Fit, Optimization, Options, Preset};
 pub use report::{Conversion, Severity, Warning, WarningCode};
+/// usvg той же версии, что использует ядро, — для рендера эталона (resvg).
+pub use usvg;
 
 /// Версия ядра.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -51,16 +53,19 @@ fn fontdb() -> Arc<usvg::fontdb::Database> {
     .clone()
 }
 
-/// Конвертирует SVG (содержимое файла) в TGS.
-pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
-    let background = parse_background(&options.background)?;
-
+/// Разбирает SVG в нормализованное дерево usvg с системными шрифтами.
+pub fn parse_svg(svg: &[u8]) -> Result<usvg::Tree, Error> {
     let usvg_options = usvg::Options {
         fontdb: fontdb(),
         ..usvg::Options::default()
     };
-    let tree =
-        usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))?;
+    usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))
+}
+
+/// Конвертирует SVG (содержимое файла) в TGS.
+pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
+    let background = parse_background(&options.background)?;
+    let tree = parse_svg(svg)?;
 
     let canvas = options.effective_canvas_size();
     let fit = fit_transform(tree.size(), canvas as f32, options);
@@ -133,7 +138,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
 
 /// Матрица, вписывающая рисунок размера `size` в квадрат `canvas`
 /// с учётом отступа и способа вписывания; рисунок центрируется.
-fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transform {
+pub fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transform {
     let (w, h) = (size.width(), size.height());
     let padding = options.padding.clamp(0.0, 0.45);
     let area = canvas * (1.0 - 2.0 * padding);
@@ -146,7 +151,8 @@ fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transform 
     Transform::from_row(scale, 0.0, 0.0, scale, tx, ty)
 }
 
-fn parse_background(bg: &Background) -> Result<Option<[u8; 3]>, Error> {
+/// Цвет фона из параметров: `None` — прозрачный.
+pub fn parse_background(bg: &Background) -> Result<Option<[u8; 3]>, Error> {
     match bg {
         Background::Transparent => Ok(None),
         Background::Solid(s) => {

@@ -40,8 +40,6 @@ pub enum WarningCode {
     /// Градиент передан приближённо: перекос или растяжение формы,
     /// повторение (`spreadMethod`) или фокусный радиус.
     GradientApproximated,
-    /// Обводка под неравномерным растяжением передана с одинаковой толщиной.
-    StrokeApproximated,
 }
 
 impl WarningCode {

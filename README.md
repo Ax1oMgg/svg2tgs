@@ -3,7 +3,7 @@
 Настольное приложение, которое превращает SVG в стикеры и эмодзи Telegram
 (формат TGS). Windows, macOS и Linux. Работает полностью локально.
 
-> Статус: **этап 1 — работает конвертация** (ядро и командная строка).
+> Статус: **этап 2 — конвертация и попиксельная проверка движком Telegram.**
 > Интерфейс приложения — этап 5. Функционал — в [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Командная строка
@@ -17,6 +17,8 @@ cargo run --release -p svg2tgs-cli -- папка_с_svg -o папка_для_tgs
 
 ```
 core/            Rust-библиотека: SVG → Lottie → TGS, проверки Telegram
+render/          рендер для превью и тестов: TGS через rlottie, SVG через resvg
+  vendor/        исходники rlottie (движок Telegram) — см. README внутри
 cli/             командная строка svg2tgs на том же ядре
 app/             настольное приложение (Tauri 2 + React + TypeScript)
   src/           интерфейс
@@ -39,4 +41,5 @@ npm run tauri dev
 
 ## Лицензия
 
-MIT — см. [`LICENSE`](LICENSE).
+MIT — см. [`LICENSE`](LICENSE). Сторонние компоненты —
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

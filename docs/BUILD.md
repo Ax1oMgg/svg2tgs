@@ -52,12 +52,35 @@ npm run tauri build
 npm run tauri -- build --config src-tauri/tauri.windows-offline.conf.json
 ```
 
-## Ядро и командная строка
+Компилятор C++ из списка выше нужен и для rlottie (рендер превью):
+он собирается из исходников в `render/vendor` при первой сборке,
+cmake и интернет не нужны.
+
+## Ядро, командная строка и тесты
 
 ```sh
-cargo test                     # тесты ядра и CLI
+cargo test                     # все тесты, включая попиксельные
 cargo run -p svg2tgs-cli -- tests/fixtures -o out
 ```
+
+Попиксельный тест (`render/tests/pixel.rs`) конвертирует каждый SVG
+из `tests/fixtures`, рисует результат движком Telegram (rlottie),
+эталон — resvg, и сравнивает. При провале картинка различий появится
+в `target/pixel-diff/`: эталон | результат | карта различий.
+
+Тесты на форке rlottie из Telegram Desktop (LGPL, в сборку
+приложения не входит — см. `render/vendor/README.md`):
+```sh
+cargo test -p svg2tgs-render --features telegram-rlottie
+```
+
+## Проверка на большом наборе SVG
+
+```sh
+cargo run --release -p svg2tgs-render --example corpus -- ПАПКА_С_SVG --out отчёт
+```
+В папке `отчёт`: `summary.txt` со статистикой, `all.csv` по каждому
+файлу и картинки различий для самых непохожих.
 
 ## Иконка приложения
 
