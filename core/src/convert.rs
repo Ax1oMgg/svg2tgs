@@ -50,6 +50,8 @@ pub struct Converter {
     round_color: Rounder,
     pub layers: Vec<LayerDraft>,
     pub warnings: Vec<Warning>,
+    /// Самая тонкая видимая обводка, пиксели канваса.
+    pub thinnest_stroke: Option<f64>,
     next_layer_id: usize,
 }
 
@@ -60,6 +62,7 @@ impl Converter {
             round_color: Rounder::new(3),
             layers: Vec::new(),
             warnings: Vec::new(),
+            thinnest_stroke: None,
             next_layer_id: 0,
         }
     }
@@ -224,6 +227,10 @@ impl Converter {
         let base = path_to_beziers(p.data(), &m, &self.round);
         if base.is_empty() {
             return;
+        }
+        if let Some(s) = p.stroke().filter(|s| s.opacity().get() > 0.0) {
+            let w = s.width().get() as f64 * mean_scale(&m);
+            self.thinnest_stroke = Some(self.thinnest_stroke.map_or(w, |t| t.min(w)));
         }
         match self.relation(&base, p, ctx) {
             Relation::Outside => return,

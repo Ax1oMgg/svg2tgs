@@ -361,6 +361,12 @@ struct VRleTask {
     {
         if (mPath.points().size() > SHRT_MAX ||
             mPath.points().size() + mPath.segments() > SHRT_MAX) {
+            // svg2tgs: без сигнала ожидающий поток (SharedRle::wait)
+            // зависает навсегда. Фигура слишком сложна для растеризатора
+            // (16-битные счётчики) — рисуем пустоту. См. render/vendor/README.md.
+            mRle.unsafe().reset();
+            mPath = VPath();
+            mRle.notify();
             return;
         }
 

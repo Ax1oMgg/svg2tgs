@@ -615,3 +615,109 @@ fn stretched_stroke_becomes_outline() {
     };
     assert!(pos("#1b1f24") < pos("#f5b400"));
 }
+
+#[test]
+fn thin_lines_are_reported_for_emoji_only() {
+    let thin = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <circle cx="256" cy="256" r="200" fill="none" stroke="#000" stroke-width="4"/></svg>"##;
+    let emoji = Options {
+        preset: Preset::Emoji,
+        ..Options::default()
+    };
+    let has = |c: &svg2tgs_core::Conversion| {
+        c.warnings
+            .iter()
+            .any(|w| matches!(w.code, WarningCode::ThinLinesForEmoji { .. }))
+    };
+    assert!(has(&convert(thin, &emoji).unwrap()));
+    assert!(
+        !has(&convert(thin, &Options::default()).unwrap()),
+        "у стикера не нужно"
+    );
+    // Иконка 24×24 со stroke-width 2 даёт ≈43 px — для эмодзи достаточно.
+    assert!(!has(&convert(&fixture("stroke-icon.svg"), &emoji).unwrap()));
+}
+
+#[test]
+fn heavy_drawing_is_simplified_to_fit_the_limit() {
+    // Сотни мелких зубчатых многоугольников: без упрощения > 64 КБ.
+    let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">"#);
+    for row in 0..20 {
+        for col in 0..20 {
+            let (cx, cy) = (13.0 + col as f64 * 25.6, 13.0 + row as f64 * 25.6);
+            let mut d = String::new();
+            for k in 0..120 {
+                let a = k as f64 / 120.0 * std::f64::consts::TAU;
+                let r = 10.0 + 0.05 * ((k * 7 + row + col) % 3) as f64;
+                d += &format!(
+                    "{}{:.3} {:.3}",
+                    if k == 0 { "M" } else { "L" },
+                    cx + r * a.cos(),
+                    cy + r * a.sin()
+                );
+            }
+            svg += &format!(r##"<path fill="#2f81f7" d="{d}Z"/>"##);
+        }
+    }
+    svg += "</svg>";
+
+    let lossless = convert(
+        svg.as_bytes(),
+        &Options {
+            optimization: svg2tgs_core::Optimization::Lossless,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        lossless.tgs_bytes() > 64 * 1024,
+        "тест должен быть тяжёлым: {}",
+        lossless.tgs_bytes()
+    );
+
+    let auto = convert(svg.as_bytes(), &Options::default()).unwrap();
+    assert!(auto.tgs_bytes() <= 64 * 1024, "{} байт", auto.tgs_bytes());
+    assert!(auto
+        .warnings
+        .iter()
+        .any(|w| matches!(w.code, WarningCode::Simplified { .. })));
+    assert!(!auto
+        .warnings
+        .iter()
+        .any(|w| matches!(w.code, WarningCode::SizeOverLimit { .. })));
+}
+
+#[test]
+fn huge_single_shape_is_simplified_below_rlottie_limit() {
+    // Один контур из 20 000 вершин (≈60 000 точек — больше потолка
+    // растеризатора rlottie) с еле заметной «рябью».
+    let mut d = String::new();
+    for k in 0..20_000 {
+        let a = k as f64 / 20_000.0 * std::f64::consts::TAU;
+        let r = 200.0 + 0.02 * (k % 2) as f64;
+        d += &format!(
+            "{}{:.3} {:.3}",
+            if k == 0 { "M" } else { "L" },
+            256.0 + r * a.cos(),
+            256.0 + r * a.sin()
+        );
+    }
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="#2f81f7" d="{d}Z"/></svg>"##
+    );
+    let conv = convert(svg.as_bytes(), &Options::default()).unwrap();
+    assert!(!conv
+        .warnings
+        .iter()
+        .any(|w| matches!(w.code, WarningCode::TooComplex { .. })));
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(&conv.tgs[..])
+        .read_to_string(&mut text)
+        .unwrap();
+    let json: Value = serde_json::from_str(&text).unwrap();
+    let verts: usize = all(&json, "sh")
+        .iter()
+        .map(|s| s["ks"]["k"]["v"].as_array().unwrap().len())
+        .sum();
+    assert!(verts * 3 < 30_000, "вершин {verts}");
+}

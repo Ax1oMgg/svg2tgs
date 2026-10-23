@@ -275,16 +275,12 @@ mod tests {
         assert_eq!(img.pixel(95, 95), [255, 0, 0, 255]);
     }
 
-    /// Правка в vendor/rlottie-samsung (lottieitem.cpp): лимит 15000 точек
-    /// снят — иначе большие стикеры рисуются частично, а в Telegram целиком.
-    #[test]
-    fn many_points_are_all_drawn() {
-        // Квадрат, контур которого разбит на 20000 точек.
-        let n = 5000;
+    /// Квадрат 80×80, контур которого разбит на `per_side × 4` вершин.
+    fn dense_square(per_side: usize) -> String {
         let mut v = Vec::new();
         for side in 0..4 {
-            for k in 0..n {
-                let t = 80.0 * k as f64 / n as f64;
+            for k in 0..per_side {
+                let t = 80.0 * k as f64 / per_side as f64;
                 let p = match side {
                     0 => [10.0 + t, 10.0],
                     1 => [90.0, 10.0 + t],
@@ -295,17 +291,34 @@ mod tests {
             }
         }
         let zeros = vec!["[0,0]"; v.len()].join(",");
-        let path = format!(
+        format!(
             r#"{{"c":true,"i":[{zeros}],"o":[{zeros}],"v":[{}]}}"#,
             v.join(",")
-        );
-        let img = render_lottie(
-            animation(&[layer(1, 100, &path, "0,0,1")]).as_bytes(),
-            100,
-            0,
         )
-        .unwrap();
+    }
+
+    /// Правка в vendor/rlottie-samsung (lottieitem.cpp): лимит 15000 точек
+    /// снят — иначе большие стикеры рисуются частично, а в Telegram целиком.
+    /// 8000 вершин ≈ 24 000 точек: больше лимита Samsung, меньше потолка
+    /// растеризатора (32 767).
+    #[test]
+    fn many_points_are_all_drawn() {
+        let json = animation(&[layer(1, 100, &dense_square(2000), "0,0,1")]);
+        let img = render_lottie(json.as_bytes(), 100, 0).unwrap();
         assert_eq!(img.pixel(50, 50), [0, 0, 255, 255]);
+    }
+
+    /// Правка в vendor/rlottie-*/vraster.cpp: фигура больше 32 767 точек
+    /// раньше подвешивала отрисовку навсегда. Теперь она пропускается.
+    #[test]
+    fn too_many_points_do_not_hang() {
+        let json = animation(&[layer(1, 100, &dense_square(5000), "0,0,1")]);
+        let img = render_lottie(json.as_bytes(), 100, 0).unwrap();
+        assert_eq!(
+            img.pixel(50, 50)[3],
+            0,
+            "такую фигуру растеризатор не рисует"
+        );
     }
 
     #[test]

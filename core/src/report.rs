@@ -49,6 +49,12 @@ pub enum WarningCode {
     /// Чтобы уложиться в лимит размера, контуры упрощены: отклонение
     /// не больше `tolerance` пикселей канваса 512.
     Simplified { tolerance: f32 },
+    /// Фигура слишком сложна для движка Telegram даже после упрощения:
+    /// `points` точек при пределе `limit`. В Telegram она не нарисуется.
+    TooComplex { points: usize, limit: usize },
+    /// Для эмодзи: линии такой толщины (пиксели канваса 512) почти
+    /// исчезнут при показе в строке текста.
+    ThinLinesForEmoji { width: f32, recommended: f32 },
 }
 
 impl WarningCode {

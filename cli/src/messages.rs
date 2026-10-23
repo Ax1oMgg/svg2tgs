@@ -38,6 +38,14 @@ pub fn warning(w: &Warning) -> String {
         WarningCode::Simplified { tolerance } => format!(
             "чтобы уложиться в лимит, контуры упрощены (отклонение до {tolerance} px из 512)"
         ),
+        WarningCode::TooComplex { points, limit } => format!(
+            "слишком сложная фигура ({points} точек при пределе {limit}): \
+             Telegram её не нарисует — упростите рисунок"
+        ),
+        WarningCode::ThinLinesForEmoji { width, recommended } => format!(
+            "для эмодзи слишком тонкие линии ({width} px из 512, лучше от {recommended}): \
+             в строке текста они почти пропадут"
+        ),
         WarningCode::DurationTooLong { secs, max } => {
             format!("длительность {secs:.2} с, а Telegram разрешает не больше {max:.0} с")
         }

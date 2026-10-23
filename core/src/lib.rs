@@ -93,7 +93,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     let mut result = None;
     for (step, &(decimals, tolerance)) in ladder.iter().enumerate() {
         let built = build(&tree, options, background, decimals, tolerance)?;
-        let fits = built.tgs.len() <= limit;
+        let fits = built.tgs.len() <= limit && built.max_points <= telegram::MAX_POINTS_PER_SHAPE;
         result = Some((step, tolerance, built));
         if fits {
             break;
@@ -107,6 +107,29 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
         warnings.push(Warning {
             code: WarningCode::Simplified {
                 tolerance: tolerance as f32,
+            },
+            element_id: None,
+        });
+    }
+    if options.preset == Preset::Emoji {
+        if let Some(w) = built
+            .thinnest_stroke
+            .filter(|&w| w < telegram::EMOJI_MIN_STROKE)
+        {
+            warnings.push(Warning {
+                code: WarningCode::ThinLinesForEmoji {
+                    width: (w * 10.0).round() as f32 / 10.0,
+                    recommended: telegram::EMOJI_MIN_STROKE as f32,
+                },
+                element_id: None,
+            });
+        }
+    }
+    if built.max_points > telegram::MAX_POINTS_PER_SHAPE {
+        warnings.push(Warning {
+            code: WarningCode::TooComplex {
+                points: built.max_points,
+                limit: telegram::MAX_POINTS_PER_SHAPE,
             },
             element_id: None,
         });
@@ -132,6 +155,9 @@ struct Built {
     tgs: Vec<u8>,
     json_bytes: usize,
     warnings: Vec<Warning>,
+    thinnest_stroke: Option<f64>,
+    /// Точек в самой сложной группе (см. `telegram::MAX_POINTS_PER_SHAPE`).
+    max_points: usize,
 }
 
 /// Один проход конвертации с заданной точностью.
@@ -183,12 +209,21 @@ fn build(
         layers,
         tgs: 1,
     };
+    let max_points = animation
+        .layers
+        .iter()
+        .flat_map(|l| &l.shapes)
+        .map(lottie::Shape::rlottie_points)
+        .max()
+        .unwrap_or(0);
     let json =
         serde_json::to_vec(&animation).expect("сериализация Lottie не может завершиться ошибкой");
     Ok(Built {
+        max_points,
         tgs: gzip(&json),
         json_bytes: json.len(),
         warnings: conv.warnings,
+        thinnest_stroke: conv.thinnest_stroke,
     })
 }
 

@@ -66,6 +66,10 @@ impl<T> Static<T> {
     pub fn new(k: T) -> Self {
         Self { a: 0, k }
     }
+
+    pub fn get(&self) -> &T {
+        &self.k
+    }
 }
 
 impl Static<Num> {
@@ -199,6 +203,19 @@ pub enum Shape {
     },
     #[serde(rename = "tr")]
     Transform(GroupTransform),
+}
+
+impl Shape {
+    /// Сколько точек получит rlottie, собрав все пути этой группы в одну
+    /// фигуру: по 3 на вершину (вершина и две контрольные), плюс замыкание
+    /// и начало подпути.
+    pub fn rlottie_points(&self) -> usize {
+        match self {
+            Shape::Group { it, .. } => it.iter().map(Shape::rlottie_points).sum(),
+            Shape::Path { ks } => 3 * ks.get().v.len() + 5,
+            _ => 0,
+        }
+    }
 }
 
 /// Заливка: правило заполнения в терминах Lottie.
