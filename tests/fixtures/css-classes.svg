@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Типичный экспорт из Illustrator: стили в <style>, элементы через class -->
+  <style>
+    .cls-1 { fill: #1f9d55; }
+    .cls-2 { fill: none; stroke: #1b1f24; stroke-width: 4px; }
+    #eye { fill: #ffffff; }
+  </style>
+  <circle class="cls-1" cx="50" cy="50" r="40"/>
+  <circle class="cls-2" cx="50" cy="50" r="40"/>
+  <circle id="eye" cx="38" cy="42" r="6"/>
+  <circle style="fill:#ffffff" cx="62" cy="42" r="6"/>
+</svg>

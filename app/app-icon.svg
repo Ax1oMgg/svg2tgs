@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Временная иконка приложения. Исходник для `npm run tauri icon app-icon.svg`. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c94ff"/>
+      <stop offset="1" stop-color="#2156c9"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#bg)"/>
+  <!-- Стикер с загнутым уголком -->
+  <path d="M300 268h330l126 126v314a48 48 0 0 1-48 48H300a48 48 0 0 1-48-48V316a48 48 0 0 1 48-48z" fill="#ffffff"/>
+  <path d="M630 268v86a40 40 0 0 0 40 40h86z" fill="#cfe0ff"/>
+  <!-- Угловые скобки: «вектор → стикер» -->
+  <path d="M432 452l-84 74 84 74" fill="none" stroke="#2f81f7" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M576 452l84 74-84 74" fill="none" stroke="#2f81f7" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

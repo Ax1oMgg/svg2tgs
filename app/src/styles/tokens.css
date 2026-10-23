@@ -1,0 +1,88 @@
+/*
+ * Дизайн-токены приложения — единственное место, где задаются цвета,
+ * шрифты, радиусы и отступы. Имена совпадают с переменными в Figma:
+ * группа/имя в Figma → --группа-имя здесь (например color/accent → --color-accent).
+ * Компоненты используют только эти переменные, без «сырых» значений.
+ */
+
+:root {
+  /* Цвета: светлая тема */
+  --color-bg: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eef0f3;
+  --color-border: #dde1e7;
+  --color-text: #1b1f24;
+  --color-text-muted: #5b6573;
+  --color-accent: #2f81f7;
+  --color-accent-text: #ffffff;
+  --color-success: #1f9d55;
+  --color-warning: #c47f00;
+  --color-danger: #d1242f;
+
+  /* Фоны превью «как в Telegram» */
+  --color-chat-light: #dbe6c8;
+  --color-chat-dark: #0e1621;
+
+  /* Типографика */
+  --font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-family-mono: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 18px;
+  --font-size-xl: 24px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 600;
+
+  /* Отступы */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Радиусы */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* Тени */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+
+  color-scheme: light;
+}
+
+/* Тёмная тема: по системе, если пользователь не выбрал светлую явно */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #0f1216;
+    --color-surface: #171b21;
+    --color-surface-muted: #1f242c;
+    --color-border: #2c333d;
+    --color-text: #e6e9ee;
+    --color-text-muted: #9aa4b2;
+    --color-accent: #4c94ff;
+    --color-success: #3fb871;
+    --color-warning: #e3a82b;
+    --color-danger: #f0545e;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    color-scheme: dark;
+  }
+}
+
+/* Тёмная тема, выбранная явно в настройках */
+:root[data-theme="dark"] {
+  --color-bg: #0f1216;
+  --color-surface: #171b21;
+  --color-surface-muted: #1f242c;
+  --color-border: #2c333d;
+  --color-text: #e6e9ee;
+  --color-text-muted: #9aa4b2;
+  --color-accent: #4c94ff;
+  --color-success: #3fb871;
+  --color-warning: #e3a82b;
+  --color-danger: #f0545e;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}

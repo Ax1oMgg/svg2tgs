@@ -1,0 +1,128 @@
+//! Параметры конвертации.
+//!
+//! Значения пресетов сейчас предварительные: на этапе 3 они сверяются
+//! с официальными требованиями Telegram и фиксируются тестами.
+
+use serde::{Deserialize, Serialize};
+
+/// Для чего готовим файл. Пресет задаёт канвас, fps и длительность.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
+    /// Анимированный стикер.
+    #[default]
+    Sticker,
+    /// Кастомный эмодзи.
+    Emoji,
+}
+
+impl Preset {
+    /// Сторона квадратного канваса в пикселях.
+    pub fn canvas_size(self) -> u32 {
+        match self {
+            Preset::Sticker | Preset::Emoji => 512,
+        }
+    }
+
+    /// Кадров в секунду.
+    pub fn fps(self) -> u32 {
+        60
+    }
+
+    /// Длительность по умолчанию, секунды.
+    pub fn duration_secs(self) -> f32 {
+        1.0
+    }
+
+    /// Лимит размера итогового .tgs в байтах.
+    pub fn max_bytes(self) -> usize {
+        64 * 1024
+    }
+}
+
+/// Как вписать рисунок в квадратный канвас.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    /// Целиком, с сохранением пропорций (как `xMidYMid meet`).
+    #[default]
+    Contain,
+    /// Заполнить канвас, лишнее обрезается (как `xMidYMid slice`).
+    Cover,
+}
+
+/// Фон под рисунком.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "color")]
+pub enum Background {
+    #[default]
+    Transparent,
+    /// Цвет в виде `#rrggbb`.
+    Solid(String),
+}
+
+/// Насколько агрессивно уменьшать размер файла.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "mode", content = "precision")]
+pub enum Optimization {
+    /// Ужать под лимит пресета с минимальной видимой потерей.
+    #[default]
+    Auto,
+    /// Только преобразования без потерь.
+    Lossless,
+    /// Фиксированная точность координат: знаков после запятой.
+    Manual(u8),
+}
+
+/// Полный набор параметров одной конвертации.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Options {
+    pub preset: Preset,
+    /// Отступ от края канваса, доля стороны: 0.0–0.2.
+    pub padding: f32,
+    pub fit: Fit,
+    pub background: Background,
+    pub optimization: Optimization,
+    /// Переопределения пресета (расширенные настройки).
+    pub canvas_size: Option<u32>,
+    pub fps: Option<u32>,
+    pub duration_secs: Option<f32>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            preset: Preset::default(),
+            padding: 0.0,
+            fit: Fit::default(),
+            background: Background::default(),
+            optimization: Optimization::default(),
+            canvas_size: None,
+            fps: None,
+            duration_secs: None,
+        }
+    }
+}
+
+impl Options {
+    pub fn effective_canvas_size(&self) -> u32 {
+        self.canvas_size
+            .unwrap_or_else(|| self.preset.canvas_size())
+    }
+
+    pub fn effective_fps(&self) -> u32 {
+        self.fps.unwrap_or_else(|| self.preset.fps())
+    }
+
+    pub fn effective_duration_secs(&self) -> f32 {
+        self.duration_secs
+            .unwrap_or_else(|| self.preset.duration_secs())
+    }
+
+    /// Число кадров анимации (не меньше 1).
+    pub fn frame_count(&self) -> u32 {
+        let frames = (self.effective_fps() as f32 * self.effective_duration_secs()).round();
+        (frames as u32).max(1)
+    }
+}

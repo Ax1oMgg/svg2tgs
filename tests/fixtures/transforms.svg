@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g transform="translate(50 50)">
+    <g transform="rotate(30)">
+      <rect x="-20" y="-20" width="40" height="40" fill="#e8505b"/>
+      <g transform="scale(0.5) skewX(20)">
+        <rect x="-20" y="-20" width="40" height="40" fill="#ffffff"/>
+      </g>
+    </g>
+  </g>
+  <path transform="matrix(1 0 0 -1 0 100)" d="M10 10h20v10h-20z" fill="#1f9d55"/>
+</svg>

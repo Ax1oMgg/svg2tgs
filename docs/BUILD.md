@@ -1,0 +1,68 @@
+# Сборка и запуск
+
+## Что нужно установить один раз
+
+### Windows 10/11
+1. **Rust**: скачать и запустить `rustup-init.exe` с https://rustup.rs
+   (на вопрос про Visual Studio C++ Build Tools — согласиться, установщик
+   поставит их сам; нужен компонент «Desktop development with C++»).
+2. **Node.js** 22 LTS или новее: https://nodejs.org
+3. **WebView2**: в Windows 11 уже есть; в Windows 10 обычно ставится
+   вместе с Edge. Если нет — https://developer.microsoft.com/microsoft-edge/webview2/
+
+### macOS
+1. `xcode-select --install`
+2. Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+3. Node.js 22+: https://nodejs.org
+
+### Linux (Debian/Ubuntu)
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+  libayatana-appindicator3-dev libssl-dev build-essential
+```
+Плюс Rust (как для macOS) и Node.js 22+.
+
+## Запуск в режиме разработки
+
+```sh
+cd app
+npm install
+npm run tauri dev
+```
+Окно приложения откроется само. Правки интерфейса в `app/src`
+применяются мгновенно, правки Rust — с пересборкой.
+
+Только интерфейс в обычном браузере, без Rust (тестовые данные):
+```sh
+cd app
+npm run dev
+```
+и открыть http://localhost:1420
+
+## Сборка установщиков
+
+```sh
+cd app
+npm run tauri build
+```
+Результат — в `target/release/bundle/`.
+
+Офлайн-установщик для Windows (WebView2 внутри):
+```sh
+npm run tauri -- build --config src-tauri/tauri.windows-offline.conf.json
+```
+
+## Ядро и командная строка
+
+```sh
+cargo test                     # тесты ядра и CLI
+cargo run -p svg2tgs-cli -- tests/fixtures -o out
+```
+
+## Иконка приложения
+
+Исходник — `app/app-icon.svg`. После правки:
+```sh
+cd app
+npm run tauri -- icon app-icon.svg -o src-tauri/icons
+```
