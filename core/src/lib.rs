@@ -8,11 +8,13 @@
 //! SVG → нормализация (usvg: `<use>`, CSS, единицы, текст в кривые)
 //! → обход дерева и перевод в Lottie → JSON → gzip.
 
+mod clip;
 mod convert;
 mod geometry;
 mod lottie;
 mod options;
 mod report;
+pub mod telegram;
 
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
@@ -62,21 +64,115 @@ pub fn parse_svg(svg: &[u8]) -> Result<usvg::Tree, Error> {
     usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))
 }
 
+/// Ступени автоподгонки под лимит размера: (знаков после запятой,
+/// допуск упрощения в пикселях канваса 512). Первая ступень визуально
+/// неотличима от оригинала; каждая следующая используется, только если
+/// файл всё ещё больше лимита.
+const AUTO_LADDER: [(u8, f64); 7] = [
+    (2, 0.05),
+    (2, 0.1),
+    (1, 0.25),
+    (1, 0.5),
+    (1, 1.0),
+    (0, 1.5),
+    (0, 2.5),
+];
+
 /// Конвертирует SVG (содержимое файла) в TGS.
 pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     let background = parse_background(&options.background)?;
     let tree = parse_svg(svg)?;
+    let limit = options.preset.max_bytes();
 
+    let ladder: Vec<(u8, f64)> = match options.optimization {
+        Optimization::Auto => AUTO_LADDER.to_vec(),
+        Optimization::Lossless => vec![(3, 0.0)],
+        Optimization::Manual(n) => vec![(n.min(6), 0.05)],
+    };
+
+    let mut result = None;
+    for (step, &(decimals, tolerance)) in ladder.iter().enumerate() {
+        let built = build(&tree, options, background, decimals, tolerance)?;
+        let fits = built.tgs.len() <= limit && built.max_points <= telegram::MAX_POINTS_PER_SHAPE;
+        result = Some((step, tolerance, built));
+        if fits {
+            break;
+        }
+    }
+    let (step, tolerance, built) = result.expect("в лестнице есть хотя бы одна ступень");
+
+    let mut warnings = telegram::check_options(options);
+    warnings.extend(built.warnings);
+    if step > 0 {
+        warnings.push(Warning {
+            code: WarningCode::Simplified {
+                tolerance: tolerance as f32,
+            },
+            element_id: None,
+        });
+    }
+    if options.preset == Preset::Emoji {
+        if let Some(w) = built
+            .thinnest_stroke
+            .filter(|&w| w < telegram::EMOJI_MIN_STROKE)
+        {
+            warnings.push(Warning {
+                code: WarningCode::ThinLinesForEmoji {
+                    width: (w * 10.0).round() as f32 / 10.0,
+                    recommended: telegram::EMOJI_MIN_STROKE as f32,
+                },
+                element_id: None,
+            });
+        }
+    }
+    if built.max_points > telegram::MAX_POINTS_PER_SHAPE {
+        warnings.push(Warning {
+            code: WarningCode::TooComplex {
+                points: built.max_points,
+                limit: telegram::MAX_POINTS_PER_SHAPE,
+            },
+            element_id: None,
+        });
+    }
+    if built.tgs.len() > limit {
+        warnings.push(Warning {
+            code: WarningCode::SizeOverLimit {
+                bytes: built.tgs.len(),
+                limit,
+            },
+            element_id: None,
+        });
+    }
+
+    Ok(Conversion {
+        tgs: built.tgs,
+        json_bytes: built.json_bytes,
+        warnings,
+    })
+}
+
+struct Built {
+    tgs: Vec<u8>,
+    json_bytes: usize,
+    warnings: Vec<Warning>,
+    thinnest_stroke: Option<f64>,
+    /// Точек в самой сложной группе (см. `telegram::MAX_POINTS_PER_SHAPE`).
+    max_points: usize,
+}
+
+/// Один проход конвертации с заданной точностью.
+fn build(
+    tree: &usvg::Tree,
+    options: &Options,
+    background: Option<[u8; 3]>,
+    decimals: u8,
+    tolerance: f64,
+) -> Result<Built, Error> {
     let canvas = options.effective_canvas_size();
     let fit = fit_transform(tree.size(), canvas as f32, options);
 
-    let decimals = match options.optimization {
-        Optimization::Auto => 2,
-        Optimization::Lossless => 4,
-        Optimization::Manual(n) => n,
-    };
-    let mut conv = convert::Converter::new(decimals);
-    conv.run(tree.root(), fit);
+    let mut conv = convert::Converter::new(lottie::Rounder::with_tolerance(decimals, tolerance));
+    conv.run(tree.root(), fit, canvas as f64);
     if conv.is_empty() {
         return Err(Error::Empty);
     }
@@ -87,7 +183,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     for draft in conv.layers.into_iter().rev() {
         let mut items = draft.items;
         items.reverse();
-        let mut layer = lottie::Layer::new(0, frames, items, draft.masks);
+        let mut layer = lottie::Layer::new(0, frames, items);
         layer
             .ks
             .set_opacity(lottie::Rounder::new(3).num(draft.opacity * 100.0));
@@ -113,26 +209,21 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
         layers,
         tgs: 1,
     };
+    let max_points = animation
+        .layers
+        .iter()
+        .flat_map(|l| &l.shapes)
+        .map(lottie::Shape::rlottie_points)
+        .max()
+        .unwrap_or(0);
     let json =
         serde_json::to_vec(&animation).expect("сериализация Lottie не может завершиться ошибкой");
-
-    let mut warnings = conv.warnings;
-    let tgs = gzip(&json);
-    let limit = options.preset.max_bytes();
-    if tgs.len() > limit {
-        warnings.push(Warning {
-            code: WarningCode::SizeOverLimit {
-                bytes: tgs.len(),
-                limit,
-            },
-            element_id: None,
-        });
-    }
-
-    Ok(Conversion {
-        tgs,
+    Ok(Built {
+        max_points,
+        tgs: gzip(&json),
         json_bytes: json.len(),
-        warnings,
+        warnings: conv.warnings,
+        thinnest_stroke: conv.thinnest_stroke,
     })
 }
 
@@ -193,7 +284,7 @@ fn background_layer(rgb: [u8; 3], canvas: u32, frames: u32) -> lottie::Layer {
             Shape::Transform(GroupTransform::default()),
         ],
     };
-    lottie::Layer::new(0, frames, vec![group], vec![])
+    lottie::Layer::new(0, frames, vec![group])
 }
 
 /// gzip с нулевым временем в заголовке: одинаковый вход — одинаковый файл.

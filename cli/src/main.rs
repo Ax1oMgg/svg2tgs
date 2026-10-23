@@ -1,7 +1,6 @@
 //! svg2tgs — командная строка.
 //!
 //! Конвертирует SVG-файлы и папки в .tgs и печатает замечания по-русски.
-//! Подробный отчёт и расширенные настройки — этап 4.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -9,7 +8,7 @@ use std::process::ExitCode;
 mod messages;
 
 use clap::{Parser, ValueEnum};
-use svg2tgs_core::{Options, Preset};
+use svg2tgs_core::{Background, Fit, Optimization, Options, Preset};
 
 #[derive(Parser, Debug)]
 #[command(name = "svg2tgs", version, about = "Конвертация SVG в Telegram TGS")]
@@ -29,6 +28,59 @@ struct Cli {
     /// Искать SVG во вложенных папках.
     #[arg(short, long)]
     recursive: bool,
+
+    /// Отступ от края канваса, % стороны (0–20).
+    #[arg(long, default_value_t = 0.0, value_parser = parse_padding)]
+    padding: f32,
+
+    /// Как вписать рисунок: целиком или заполнить с обрезкой.
+    #[arg(long, value_enum, default_value_t = FitArg::Contain)]
+    fit: FitArg,
+
+    /// Цвет фона, например #ffffff. По умолчанию прозрачный.
+    #[arg(long)]
+    bg: Option<String>,
+
+    /// Оптимизация размера: auto — уложиться в лимит Telegram,
+    /// lossless — без упрощения, число 0–6 — знаков после запятой.
+    #[arg(long, default_value = "auto", value_parser = parse_optimize)]
+    optimize: Optimization,
+
+    /// Кадров в секунду (Telegram требует 60).
+    #[arg(long)]
+    fps: Option<u32>,
+
+    /// Длительность, секунды (Telegram разрешает до 3).
+    #[arg(long)]
+    duration: Option<f32>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum FitArg {
+    Contain,
+    Cover,
+}
+
+fn parse_padding(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .trim_end_matches('%')
+        .parse()
+        .map_err(|_| "ожидается число".to_string())?;
+    if !(0.0..=20.0).contains(&v) {
+        return Err("отступ должен быть от 0 до 20 %".into());
+    }
+    Ok(v / 100.0)
+}
+
+fn parse_optimize(s: &str) -> Result<Optimization, String> {
+    match s {
+        "auto" => Ok(Optimization::Auto),
+        "lossless" => Ok(Optimization::Lossless),
+        n => match n.parse::<u8>() {
+            Ok(d) if d <= 6 => Ok(Optimization::Manual(d)),
+            _ => Err("ожидается auto, lossless или число 0–6".into()),
+        },
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -96,6 +148,18 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let options = Options {
         preset: cli.preset.into(),
+        padding: cli.padding,
+        fit: match cli.fit {
+            FitArg::Contain => Fit::Contain,
+            FitArg::Cover => Fit::Cover,
+        },
+        background: cli
+            .bg
+            .clone()
+            .map_or(Background::Transparent, Background::Solid),
+        optimization: cli.optimize,
+        fps: cli.fps,
+        duration_secs: cli.duration,
         ..Options::default()
     };
 
@@ -116,7 +180,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let (mut ok, mut failed) = (0, 0);
+    let (mut ok, mut failed, mut with_warnings, mut over_limit) = (0, 0, 0, 0);
     for file in &files {
         match convert_one(file, &cli.output, &options) {
             Ok((dst, conv)) => {
@@ -126,10 +190,14 @@ fn main() -> ExitCode {
                     .iter()
                     .any(|w| w.code.severity() == svg2tgs_core::Severity::Warning)
                 {
+                    with_warnings += 1;
                     "⚠"
                 } else {
                     "✓"
                 };
+                if conv.tgs_bytes() > options.preset.max_bytes() {
+                    over_limit += 1;
+                }
                 println!(
                     "{mark} {} → {} ({:.1} КБ)",
                     file.display(),
@@ -146,7 +214,13 @@ fn main() -> ExitCode {
             }
         }
     }
-    println!("\nГотово: {ok} успешно, {failed} с ошибкой.");
+    println!("\nГотово: {ok} успешно ({with_warnings} с замечаниями), {failed} с ошибкой.");
+    if over_limit > 0 {
+        println!(
+            "Больше лимита Telegram ({} КБ): {over_limit}. Упростите рисунок или уберите мелкие детали.",
+            options.preset.max_bytes() / 1024
+        );
+    }
 
     if failed > 0 {
         ExitCode::from(2)

@@ -20,16 +20,28 @@ impl Serialize for Num {
     }
 }
 
-/// Округление до заданного числа знаков; `-0` превращается в `0`.
+/// Точность записи геометрии: округление до заданного числа знаков
+/// (`-0` превращается в `0`) и допуск упрощения контуров в пикселях.
 #[derive(Debug, Clone, Copy)]
 pub struct Rounder {
     factor: f64,
+    /// Насколько упрощённый контур может отойти от исходного, пиксели.
+    /// 0 — не упрощать.
+    pub tolerance: f64,
 }
 
 impl Rounder {
     pub fn new(decimals: u8) -> Self {
         Self {
             factor: 10f64.powi(decimals.min(6) as i32),
+            tolerance: 0.0,
+        }
+    }
+
+    pub fn with_tolerance(decimals: u8, tolerance: f64) -> Self {
+        Self {
+            tolerance,
+            ..Self::new(decimals)
         }
     }
 
@@ -53,6 +65,10 @@ pub struct Static<T> {
 impl<T> Static<T> {
     pub fn new(k: T) -> Self {
         Self { a: 0, k }
+    }
+
+    pub fn get(&self) -> &T {
+        &self.k
     }
 }
 
@@ -109,7 +125,6 @@ impl Default for LayerTransform {
 
 /// Слой с фигурами (`ty: 4`).
 #[derive(Debug, Serialize)]
-#[allow(non_snake_case)]
 pub struct Layer {
     pub ddd: u8,
     pub ind: u32,
@@ -119,10 +134,6 @@ pub struct Layer {
     pub sr: u8,
     pub ks: LayerTransform,
     pub ao: u8,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub hasMask: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub masksProperties: Vec<Mask>,
     pub shapes: Vec<Shape>,
     pub ip: Num,
     pub op: Num,
@@ -131,7 +142,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(ind: u32, frames: u32, shapes: Vec<Shape>, masks: Vec<Mask>) -> Self {
+    pub fn new(ind: u32, frames: u32, shapes: Vec<Shape>) -> Self {
         Self {
             ddd: 0,
             ind,
@@ -140,36 +151,11 @@ impl Layer {
             sr: 1,
             ks: LayerTransform::default(),
             ao: 0,
-            hasMask: !masks.is_empty(),
-            masksProperties: masks,
             shapes,
             ip: Num(0.0),
             op: Num(frames as f64),
             st: 0,
             bm: 0,
-        }
-    }
-}
-
-/// Маска слоя — так в Lottie делается обрезка (clipPath).
-#[derive(Debug, Serialize)]
-pub struct Mask {
-    pub inv: bool,
-    /// `a` — сложение, `i` — пересечение.
-    pub mode: &'static str,
-    pub pt: Static<Bezier>,
-    pub o: Static<Num>,
-    pub x: Static<Num>,
-}
-
-impl Mask {
-    pub fn new(mode: &'static str, path: Bezier) -> Self {
-        Self {
-            inv: false,
-            mode,
-            pt: Static::new(path),
-            o: Static::new(Num(100.0)),
-            x: Static::new(Num(0.0)),
         }
     }
 }
@@ -215,16 +201,21 @@ pub enum Shape {
         #[serde(flatten)]
         line: Line,
     },
-    #[serde(rename = "gs")]
-    GradientStroke {
-        o: Static<Num>,
-        #[serde(flatten)]
-        g: Gradient,
-        #[serde(flatten)]
-        line: Line,
-    },
     #[serde(rename = "tr")]
     Transform(GroupTransform),
+}
+
+impl Shape {
+    /// Сколько точек получит rlottie, собрав все пути этой группы в одну
+    /// фигуру: по 3 на вершину (вершина и две контрольные), плюс замыкание
+    /// и начало подпути.
+    pub fn rlottie_points(&self) -> usize {
+        match self {
+            Shape::Group { it, .. } => it.iter().map(Shape::rlottie_points).sum(),
+            Shape::Path { ks } => 3 * ks.get().v.len() + 5,
+            _ => 0,
+        }
+    }
 }
 
 /// Заливка: правило заполнения в терминах Lottie.

@@ -138,6 +138,9 @@ pub fn path_to_beziers(
     }
     flush(&mut cur, &mut subs);
     subs.iter_mut().for_each(drop_zero_segments);
+    if round.tolerance > 0.0 {
+        subs.iter_mut().for_each(|sp| simplify(sp, round.tolerance));
+    }
     subs.retain(|sp| sp.verts.len() > 1);
     avoid_joined_starts(&mut subs);
 
@@ -185,6 +188,140 @@ fn drop_zero_segments(sp: &mut SubPath) {
         out.push(out[0]);
     }
     sp.verts = out;
+}
+
+/// Упрощает подпуть, не отходя от исходной формы дальше чем на `tol`.
+///
+/// 1. Кривая, обе контрольные точки которой лежат в пределах `tol` от хорды,
+///    заменяется отрезком: кривая лежит внутри выпуклой оболочки своих
+///    контрольных точек, значит, и она не дальше `tol`.
+/// 2. В цепочках прямых отрезков лишние вершины убираются алгоритмом
+///    Дугласа–Пекера. Вершины на стыке с кривыми не трогаются.
+fn simplify(sp: &mut SubPath, tol: f64) {
+    let n = sp.verts.len();
+    if n < 3 {
+        return;
+    }
+    let segments = if sp.closed { n } else { n - 1 };
+    for k in 0..segments {
+        let j = (k + 1) % n;
+        let (a, b) = (sp.verts[k].p, sp.verts[j].p);
+        if seg_dist(sp.verts[k].c_out, a, b) <= tol && seg_dist(sp.verts[j].c_in, a, b) <= tol {
+            sp.verts[k].c_out = a;
+            sp.verts[j].c_in = b;
+        }
+    }
+
+    // Вершина-«угол» между двумя прямыми отрезками — кандидат на удаление.
+    let straight_corner = |k: usize| {
+        let v = &sp.verts[k];
+        same(v.c_in, v.p) && same(v.c_out, v.p)
+    };
+    let corner: Vec<bool> = (0..n)
+        .map(|k| {
+            let inner = sp.closed || (k > 0 && k + 1 < n);
+            inner && straight_corner(k)
+        })
+        .collect();
+
+    // Опорные вершины — всё, что не кандидат. У многоугольника без опор
+    // берутся первая вершина и самая дальняя от неё.
+    let mut anchors: Vec<usize> = (0..n).filter(|&k| !corner[k]).collect();
+    if anchors.is_empty() {
+        let p0 = sp.verts[0].p;
+        let far = (1..n)
+            .max_by(|&a, &b| dist2(sp.verts[a].p, p0).total_cmp(&dist2(sp.verts[b].p, p0)))
+            .unwrap();
+        anchors = vec![0, far];
+    }
+
+    let mut keep = vec![true; n];
+    let pairs: Vec<(usize, usize)> = if sp.closed {
+        (0..anchors.len())
+            .map(|k| (anchors[k], anchors[(k + 1) % anchors.len()]))
+            .collect()
+    } else {
+        anchors.windows(2).map(|w| (w[0], w[1])).collect()
+    };
+    for (from, to) in pairs {
+        // Индексы между опорами (по кругу у замкнутого).
+        let span = if to > from { to - from } else { to + n - from };
+        if span < 2 {
+            continue;
+        }
+        let idx: Vec<usize> = (0..=span).map(|s| (from + s) % n).collect();
+        let pts: Vec<[f64; 2]> = idx.iter().map(|&k| sp.verts[k].p).collect();
+        let kept = douglas_peucker(&pts, tol);
+        for (s, &k) in idx.iter().enumerate().skip(1).take(span - 1) {
+            keep[k] = kept[s];
+        }
+    }
+
+    let simplified: Vec<Vertex> = sp
+        .verts
+        .iter()
+        .zip(&keep)
+        .filter(|(_, &k)| k)
+        .map(|(v, _)| *v)
+        .collect();
+    // Замкнутый контур тоньше допуска схлопнулся бы в отрезок — оставляем как был.
+    if !sp.closed || simplified.len() >= 3 {
+        sp.verts = simplified;
+    }
+}
+
+/// Упрощает замкнутый многоугольник (результат обрезки) с допуском `tol`.
+pub fn simplify_polygon(points: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
+    if tol <= 0.0 || points.len() < 4 {
+        return points.to_vec();
+    }
+    let mut sp = SubPath {
+        verts: points.iter().map(|&p| Vertex::at(p)).collect(),
+        closed: true,
+    };
+    simplify(&mut sp, tol);
+    sp.verts.into_iter().map(|v| v.p).collect()
+}
+
+/// Какие точки ломаной оставить (концы — всегда), чтобы отклонение
+/// не превышало `tol`.
+fn douglas_peucker(pts: &[[f64; 2]], tol: f64) -> Vec<bool> {
+    let mut keep = vec![false; pts.len()];
+    keep[0] = true;
+    *keep.last_mut().unwrap() = true;
+    let mut stack = vec![(0, pts.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        let (mut worst, mut at) = (0.0, 0);
+        for k in a + 1..b {
+            let d = seg_dist(pts[k], pts[a], pts[b]);
+            if d > worst {
+                worst = d;
+                at = k;
+            }
+        }
+        if worst > tol {
+            keep[at] = true;
+            stack.push((a, at));
+            stack.push((at, b));
+        }
+    }
+    keep
+}
+
+/// Расстояние от точки `p` до отрезка `a`–`b`.
+fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 {
+        0.0
+    } else {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+    };
+    dist2(p, [a[0] + t * dx, a[1] + t * dy]).sqrt()
+}
+
+fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
 }
 
 fn same(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -372,6 +509,76 @@ mod tests {
         if let Some(path) = path {
             let b = path_to_beziers(&path, &Transform::identity(), &Rounder::new(2));
             assert_eq!(b[0].v.len(), 2);
+        }
+    }
+
+    #[test]
+    fn collinear_points_are_removed() {
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        for x in 1..=10 {
+            pb.line_to(x as f32, 0.001 * (x % 2) as f32);
+        }
+        pb.line_to(10.0, 10.0);
+        pb.close();
+        let path = pb.finish().unwrap();
+        let b = path_to_beziers(
+            &path,
+            &Transform::identity(),
+            &Rounder::with_tolerance(2, 0.05),
+        );
+        assert_eq!(b[0].v.len(), 3, "треугольник");
+        // Без допуска все вершины на месте.
+        let b = path_to_beziers(&path, &Transform::identity(), &Rounder::new(3));
+        assert_eq!(b[0].v.len(), 12);
+    }
+
+    #[test]
+    fn nearly_straight_curve_becomes_line_but_real_curve_stays() {
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        pb.cubic_to(3.0, 0.01, 6.0, -0.01, 10.0, 0.0);
+        pb.cubic_to(10.0, 5.0, 5.0, 10.0, 0.0, 10.0);
+        let path = pb.finish().unwrap();
+        let b = path_to_beziers(
+            &path,
+            &Transform::identity(),
+            &Rounder::with_tolerance(2, 0.05),
+        );
+        let t = |v: [crate::lottie::Num; 2]| [v[0].0, v[1].0];
+        assert_eq!(t(b[0].o[0]), [0.0, 0.0], "почти прямая стала отрезком");
+        assert_ne!(t(b[0].o[1]), [0.0, 0.0], "настоящая кривая осталась");
+    }
+
+    #[test]
+    fn simplification_stays_within_tolerance() {
+        // Окружность из 200 отрезков: после упрощения с допуском 0.5
+        // все исходные точки не дальше 0.5 от упрощённого контура.
+        let mut pb = PathBuilder::new();
+        let pts: Vec<[f64; 2]> = (0..200)
+            .map(|k| {
+                let a = k as f64 / 200.0 * std::f64::consts::TAU;
+                [100.0 * a.cos(), 100.0 * a.sin()]
+            })
+            .collect();
+        pb.move_to(pts[0][0] as f32, pts[0][1] as f32);
+        for p in &pts[1..] {
+            pb.line_to(p[0] as f32, p[1] as f32);
+        }
+        pb.close();
+        let path = pb.finish().unwrap();
+        let b = path_to_beziers(
+            &path,
+            &Transform::identity(),
+            &Rounder::with_tolerance(4, 0.5),
+        );
+        let v: Vec<[f64; 2]> = b[0].v.iter().map(|p| [p[0].0, p[1].0]).collect();
+        assert!(v.len() < 60, "вершин {}", v.len());
+        for p in &pts {
+            let d = (0..v.len())
+                .map(|k| seg_dist(*p, v[k], v[(k + 1) % v.len()]))
+                .fold(f64::MAX, f64::min);
+            assert!(d <= 0.5 + 1e-3, "отклонение {d}");
         }
     }
 

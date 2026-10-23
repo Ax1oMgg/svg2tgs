@@ -130,6 +130,12 @@ static void src_SourceOver(uint32_t *dest, int length, const uint32_t *src,
          */
         for (int i = 0; i < length; ++i) {
             s = BYTE_MUL(src[i], alpha);
+            // svg2tgs: прозрачный пиксель не должен менять фон. Без этой
+            // проверки BYTE_MUL(dest, 255) теряет единицу, и каждый
+            // полупрозрачный слой (он рисуется буфером во весь канвас)
+            // делает всё под собой чуть прозрачнее. В rlottie Telegram
+            // этого нет. См. render/vendor/README.md.
+            if (s == 0) continue;
             sia = vAlpha(~s);
             dest[i] = s + BYTE_MUL(dest[i], sia);
         }

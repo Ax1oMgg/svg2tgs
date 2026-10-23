@@ -16,7 +16,7 @@ pub enum Severity {
 }
 
 /// Код замечания. Новые коды добавляются в конец, старые не меняют смысл.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "code")]
 pub enum WarningCode {
     /// Текст переведён в кривые.
@@ -40,19 +40,36 @@ pub enum WarningCode {
     /// Градиент передан приближённо: перекос или растяжение формы,
     /// повторение (`spreadMethod`) или фокусный радиус.
     GradientApproximated,
+    /// Канвас не того размера, который требует Telegram.
+    CanvasNotAllowed { size: u32, required: u32 },
+    /// Частота кадров не та, которую требует Telegram.
+    FpsNotAllowed { fps: u32, required: u32 },
+    /// Анимация длиннее, чем разрешает Telegram.
+    DurationTooLong { secs: f32, max: f32 },
+    /// Чтобы уложиться в лимит размера, контуры упрощены: отклонение
+    /// не больше `tolerance` пикселей канваса 512.
+    Simplified { tolerance: f32 },
+    /// Фигура слишком сложна для движка Telegram даже после упрощения:
+    /// `points` точек при пределе `limit`. В Telegram она не нарисуется.
+    TooComplex { points: usize, limit: usize },
+    /// Для эмодзи: линии такой толщины (пиксели канваса 512) почти
+    /// исчезнут при показе в строке текста.
+    ThinLinesForEmoji { width: f32, recommended: f32 },
 }
 
 impl WarningCode {
     pub fn severity(&self) -> Severity {
         match self {
             WarningCode::TextConvertedToPaths => Severity::Info,
+            // Меньше полупикселя на канвасе 512 на глаз не видно.
+            WarningCode::Simplified { tolerance } if *tolerance < 0.5 => Severity::Info,
             _ => Severity::Warning,
         }
     }
 }
 
 /// Одно замечание, опционально привязанное к элементу SVG.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Warning {
     #[serde(flatten)]
     pub code: WarningCode,

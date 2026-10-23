@@ -1,9 +1,10 @@
 //! Параметры конвертации.
 //!
-//! Значения пресетов сейчас предварительные: на этапе 3 они сверяются
-//! с официальными требованиями Telegram и фиксируются тестами.
+//! Значения пресетов берутся из требований Telegram (модуль `telegram`).
 
 use serde::{Deserialize, Serialize};
+
+use crate::telegram;
 
 /// Для чего готовим файл. Пресет задаёт канвас, fps и длительность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -18,25 +19,25 @@ pub enum Preset {
 
 impl Preset {
     /// Сторона квадратного канваса в пикселях.
+    /// Для эмодзи Telegram отдельных цифр не даёт: правила те же.
     pub fn canvas_size(self) -> u32 {
-        match self {
-            Preset::Sticker | Preset::Emoji => 512,
-        }
+        telegram::CANVAS
     }
 
     /// Кадров в секунду.
     pub fn fps(self) -> u32 {
-        60
+        telegram::FPS
     }
 
-    /// Длительность по умолчанию, секунды.
+    /// Длительность по умолчанию, секунды. Рисунок статичный, поэтому
+    /// подойдёт любая в пределах лимита; одна секунда — 60 кадров.
     pub fn duration_secs(self) -> f32 {
         1.0
     }
 
     /// Лимит размера итогового .tgs в байтах.
     pub fn max_bytes(self) -> usize {
-        64 * 1024
+        telegram::MAX_BYTES
     }
 }
 

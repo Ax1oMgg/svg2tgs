@@ -29,6 +29,26 @@ pub fn warning(w: &Warning) -> String {
             "сложная вложенная обрезка передана приближённо".to_string()
         }
         WarningCode::GradientApproximated => "градиент передан приближённо".to_string(),
+        WarningCode::CanvasNotAllowed { size, required } => {
+            format!("канвас {size}×{size}, а Telegram требует {required}×{required}")
+        }
+        WarningCode::FpsNotAllowed { fps, required } => {
+            format!("{fps} кадров/с, а Telegram требует {required}")
+        }
+        WarningCode::Simplified { tolerance } => format!(
+            "чтобы уложиться в лимит, контуры упрощены (отклонение до {tolerance} px из 512)"
+        ),
+        WarningCode::TooComplex { points, limit } => format!(
+            "слишком сложная фигура ({points} точек при пределе {limit}): \
+             Telegram её не нарисует — упростите рисунок"
+        ),
+        WarningCode::ThinLinesForEmoji { width, recommended } => format!(
+            "для эмодзи слишком тонкие линии ({width} px из 512, лучше от {recommended}): \
+             в строке текста они почти пропадут"
+        ),
+        WarningCode::DurationTooLong { secs, max } => {
+            format!("длительность {secs:.2} с, а Telegram разрешает не больше {max:.0} с")
+        }
     };
     match &w.element_id {
         Some(id) => format!("{text} (элемент «{id}»)"),

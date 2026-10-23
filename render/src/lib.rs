@@ -228,6 +228,99 @@ mod tests {
         assert_eq!(img.pixel(300, 200)[3], 0);
     }
 
+    /// Обёртка анимации 100×100 вокруг готовых слоёв.
+    fn animation(layers: &[String]) -> String {
+        format!(
+            r#"{{"v":"5.7.4","fr":60,"ip":0,"op":60,"w":100,"h":100,"ddd":0,"assets":[],"layers":[{}]}}"#,
+            layers.join(",")
+        )
+    }
+
+    fn layer(ind: usize, opacity: u32, path: &str, rgb: &str) -> String {
+        format!(
+            r#"{{"ddd":0,"ind":{ind},"ty":4,"sr":1,"ao":0,"ip":0,"op":60,"st":0,"bm":0,
+            "ks":{{"o":{{"a":0,"k":{opacity}}},"r":{{"a":0,"k":0}},"p":{{"a":0,"k":[0,0,0]}},"a":{{"a":0,"k":[0,0,0]}},"s":{{"a":0,"k":[100,100,100]}}}},
+            "shapes":[{{"ty":"gr","it":[{{"ty":"sh","ks":{{"a":0,"k":{path}}}}},
+              {{"ty":"fl","c":{{"a":0,"k":[{rgb},1]}},"o":{{"a":0,"k":100}},"r":1}},
+              {{"ty":"tr","p":{{"a":0,"k":[0,0]}},"a":{{"a":0,"k":[0,0]}},"s":{{"a":0,"k":[100,100]}},"r":{{"a":0,"k":0}},"o":{{"a":0,"k":100}}}}]}}]}}"#
+        )
+    }
+
+    fn square(x: u32, y: u32, s: u32) -> String {
+        format!(
+            r#"{{"c":true,"i":[[0,0],[0,0],[0,0],[0,0]],"o":[[0,0],[0,0],[0,0],[0,0]],"v":[[{x},{y}],[{},{y}],[{},{}],[{x},{}]]}}"#,
+            x + s,
+            x + s,
+            y + s,
+            y + s
+        )
+    }
+
+    /// Правка в vendor/rlottie-samsung (vdrawhelper_common.cpp): без неё
+    /// каждый полупрозрачный слой делает всё под собой прозрачнее на 1/255.
+    #[test]
+    fn semi_transparent_layers_do_not_fade_the_background() {
+        let mut layers: Vec<String> = (0..45)
+            .map(|k| {
+                layer(
+                    k + 1,
+                    60,
+                    &square(10 + (k as u32 % 8) * 10, 10 + (k as u32 / 8) * 10, 6),
+                    "0,0,1",
+                )
+            })
+            .collect();
+        layers.push(layer(46, 100, &square(0, 0, 100), "1,0,0"));
+        let img = render_lottie(animation(&layers).as_bytes(), 100, 0).unwrap();
+        assert_eq!(img.pixel(95, 95), [255, 0, 0, 255]);
+    }
+
+    /// Квадрат 80×80, контур которого разбит на `per_side × 4` вершин.
+    fn dense_square(per_side: usize) -> String {
+        let mut v = Vec::new();
+        for side in 0..4 {
+            for k in 0..per_side {
+                let t = 80.0 * k as f64 / per_side as f64;
+                let p = match side {
+                    0 => [10.0 + t, 10.0],
+                    1 => [90.0, 10.0 + t],
+                    2 => [90.0 - t, 90.0],
+                    _ => [10.0, 90.0 - t],
+                };
+                v.push(format!("[{:.3},{:.3}]", p[0], p[1]));
+            }
+        }
+        let zeros = vec!["[0,0]"; v.len()].join(",");
+        format!(
+            r#"{{"c":true,"i":[{zeros}],"o":[{zeros}],"v":[{}]}}"#,
+            v.join(",")
+        )
+    }
+
+    /// Правка в vendor/rlottie-samsung (lottieitem.cpp): лимит 15000 точек
+    /// снят — иначе большие стикеры рисуются частично, а в Telegram целиком.
+    /// 8000 вершин ≈ 24 000 точек: больше лимита Samsung, меньше потолка
+    /// растеризатора (32 767).
+    #[test]
+    fn many_points_are_all_drawn() {
+        let json = animation(&[layer(1, 100, &dense_square(2000), "0,0,1")]);
+        let img = render_lottie(json.as_bytes(), 100, 0).unwrap();
+        assert_eq!(img.pixel(50, 50), [0, 0, 255, 255]);
+    }
+
+    /// Правка в vendor/rlottie-*/vraster.cpp: фигура больше 32 767 точек
+    /// раньше подвешивала отрисовку навсегда. Теперь она пропускается.
+    #[test]
+    fn too_many_points_do_not_hang() {
+        let json = animation(&[layer(1, 100, &dense_square(5000), "0,0,1")]);
+        let img = render_lottie(json.as_bytes(), 100, 0).unwrap();
+        assert_eq!(
+            img.pixel(50, 50)[3],
+            0,
+            "такую фигуру растеризатор не рисует"
+        );
+    }
+
     #[test]
     fn png_roundtrip_has_signature() {
         let png = Image::new(4, 4).to_png();
