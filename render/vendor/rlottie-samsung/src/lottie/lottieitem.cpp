@@ -94,7 +94,10 @@ static constexpr size_t kMaxLayerNodes = 100000;  // global render-node budget
 // bounds nested repeaters (repeater whose content contains another
 // repeater), since every copy at every nesting level draws from the same
 // shared budget.
-static constexpr size_t kMaxShapeContentBudget = 15000;
+// svg2tgs: лимит снят. В rlottie Telegram его нет, а превью должно
+// показывать то же, что Telegram: с лимитом 15000 большие стикеры
+// рисовались бы частично. См. render/vendor/README.md.
+static constexpr size_t kMaxShapeContentBudget = static_cast<size_t>(-1);
 
 static renderer::Layer *createLayerItem(model::Layer *layerData,
                                         VArenaAlloc *allocator, int depth,

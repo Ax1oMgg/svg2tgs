@@ -4,17 +4,20 @@
 //! в пиксели канваса, а группы Lottie получают тождественное преобразование.
 //! Так результат не зависит от того, как разные плееры раскладывают матрицы.
 //!
-//! Обрезка (`clipPath`) в Lottie делается масками слоя, поэтому элементы
-//! с разной обрезкой попадают в разные слои; остальное — в один слой.
+//! Обрезка (`clipPath`, края канваса) выполняется геометрически
+//! (модуль `clip`): маски Lottie Telegram запрещает.
+
+use std::rc::Rc;
 
 use usvg::{
     BlendMode, FillRule, Group, LineCap, LineJoin, Node, Paint, PaintOrder, Path, SpreadMethod,
     Transform,
 };
 
+use crate::clip::{self, Area, Contours, Relation};
 use crate::geometry::{is_similarity, map, mean_scale, path_to_beziers};
 use crate::lottie::{
-    Bezier, Gradient, GradientStops, GroupTransform, Line, Mask, Num, Rounder, Shape, Static,
+    Bezier, Gradient, GradientStops, GroupTransform, Line, Num, Rounder, Shape, Static,
     FILL_RULE_EVENODD, FILL_RULE_NONZERO,
 };
 use crate::report::{Warning, WarningCode};
@@ -22,7 +25,6 @@ use crate::report::{Warning, WarningCode};
 /// Слой в процессе сборки: элементы в порядке документа (снизу вверх).
 pub struct LayerDraft {
     key: Vec<usize>,
-    pub masks: Vec<Mask>,
     /// Прозрачность всего слоя, 0–1.
     pub opacity: f64,
     pub items: Vec<Shape>,
@@ -34,11 +36,10 @@ struct Ctx {
     matrix: Transform,
     /// Множитель прозрачности для заливок и обводок внутри текущего слоя.
     opacity: f64,
-    /// Идентификаторы активных обрезок и прозрачных групп —
-    /// по ним элементы делятся на слои.
+    /// Идентификаторы прозрачных групп — по ним элементы делятся на слои.
     layer_key: Vec<usize>,
-    /// Маски активных обрезок.
-    masks: Vec<(usize, Vec<Bezier>)>,
+    /// Область, в которой элементы видны: канвас ∩ все активные `clipPath`.
+    clip: Rc<Area>,
     /// Прозрачность слоя, если элементы внутри прозрачной группы.
     layer_opacity: Option<f64>,
 }
@@ -63,13 +64,17 @@ impl Converter {
         }
     }
 
-    /// Обходит дерево, начиная с корня, с матрицей вписывания в канвас.
-    pub fn run(&mut self, root: &Group, fit: Transform) {
+    /// Обходит дерево, начиная с корня, с матрицей вписывания в канвас
+    /// стороной `canvas`. Всё, что выходит за канвас, обрезается:
+    /// по правилам Telegram объекты не должны выходить за его пределы.
+    pub fn run(&mut self, root: &Group, fit: Transform, canvas: f64) {
         let ctx = Ctx {
             matrix: fit,
             opacity: 1.0,
             layer_key: Vec::new(),
-            masks: Vec::new(),
+            // Допуск 1 px: выход за край на доли пикселя (сглаживание,
+            // контрольные точки у края) не виден, а обрезка спрямляет кривые.
+            clip: Rc::new(Area::from_rect([-1.0, -1.0, canvas + 1.0, canvas + 1.0])),
             layer_opacity: None,
         };
         self.walk_group_children(root, &ctx);
@@ -166,75 +171,48 @@ impl Converter {
         self.walk_group_children(g, &ctx);
     }
 
-    /// Добавляет обрезку в контекст: её кривые становятся масками слоя.
     fn new_layer_id(&mut self) -> usize {
         self.next_layer_id += 1;
         self.next_layer_id
     }
 
-    fn push_clip(&mut self, clip: &usvg::ClipPath, ctx: &mut Ctx) {
-        let m = ctx.matrix.pre_concat(clip.transform());
-        let mut beziers = Vec::new();
-        self.collect_clip_paths(clip.root(), m, &mut beziers);
-
-        let level_id = self.new_layer_id();
-        ctx.layer_key.push(level_id);
-        ctx.masks.push((level_id, beziers));
-
-        if let Some(inner) = clip.clip_path() {
+    /// Сужает видимую область контекста до `clipPath`
+    /// (и вложенного в него `clip-path`, если есть).
+    fn push_clip(&mut self, clip_path: &usvg::ClipPath, ctx: &mut Ctx) {
+        let m = ctx.matrix.pre_concat(clip_path.transform());
+        let mut area = Contours::new();
+        self.collect_clip_region(clip_path.root(), m, &mut area);
+        ctx.clip = Rc::new(ctx.clip.intersect(&area));
+        if let Some(inner) = clip_path.clip_path() {
             self.push_clip(inner, ctx);
         }
     }
 
-    fn collect_clip_paths(&mut self, g: &Group, m: Transform, out: &mut Vec<Bezier>) {
+    /// Объединение всех фигур `clipPath` с их правилами `clip-rule`.
+    fn collect_clip_region(&mut self, g: &Group, m: Transform, out: &mut Contours) {
         for node in g.children() {
             match node {
                 Node::Group(child) => {
                     if child.clip_path().is_some() {
                         self.warn(WarningCode::ClipApproximated, child.id());
                     }
-                    self.collect_clip_paths(child, m.pre_concat(child.transform()), out);
+                    self.collect_clip_region(child, m.pre_concat(child.transform()), out);
                 }
                 Node::Path(p) if p.is_visible() => {
-                    out.extend(path_to_beziers(p.data(), &m, &self.round));
+                    let rule = match p.fill().map(|f| f.rule()) {
+                        Some(FillRule::EvenOdd) => FILL_RULE_EVENODD,
+                        _ => FILL_RULE_NONZERO,
+                    };
+                    let beziers = path_to_beziers(p.data(), &m, &self.round);
+                    *out = clip::union(out, &clip::region(&beziers, rule));
                 }
                 Node::Text(t) => {
                     let flat = t.flattened();
-                    self.collect_clip_paths(flat, m.pre_concat(flat.transform()), out);
+                    self.collect_clip_region(flat, m.pre_concat(flat.transform()), out);
                 }
                 _ => {}
             }
         }
-    }
-
-    /// Маски слоя для набора обрезок: первый уровень — объединение его
-    /// кривых, каждый следующий — пересечение. Пересечение с объединением
-    /// нескольких кривых в Lottie не выражается — берётся приближение.
-    fn build_masks(&mut self, levels: &[(usize, Vec<Bezier>)]) -> Vec<Mask> {
-        let mut masks = Vec::new();
-        for (n, (_, beziers)) in levels.iter().enumerate() {
-            if beziers.is_empty() {
-                // Пустая обрезка скрывает всё — пустая маска даёт тот же эффект.
-                masks.push(Mask::new(
-                    if n == 0 { "a" } else { "i" },
-                    Bezier {
-                        c: true,
-                        i: vec![],
-                        o: vec![],
-                        v: vec![],
-                    },
-                ));
-                continue;
-            }
-            if n > 0 && beziers.len() > 1 {
-                self.warn(WarningCode::ClipApproximated, "");
-            }
-            for b in beziers {
-                let mode = if n == 0 { "a" } else { "i" };
-                masks.push(Mask::new(mode, b.clone()));
-            }
-        }
-        masks
     }
 
     fn draw_path(&mut self, p: &Path, ctx: &Ctx) {
@@ -246,6 +224,11 @@ impl Converter {
         let base = path_to_beziers(p.data(), &m, &self.round);
         if base.is_empty() {
             return;
+        }
+        match self.relation(&base, p, ctx) {
+            Relation::Outside => return,
+            Relation::Crossing => return self.draw_clipped(p, ctx),
+            Relation::Inside => {}
         }
 
         // У отрезка нет площади: заливка ничего не рисует, только занимает место.
@@ -331,6 +314,113 @@ impl Converter {
         }
     }
 
+    /// Положение элемента относительно видимой области — по рамке
+    /// с запасом на толщину обводки, острые углы и концы линий.
+    fn relation(&self, base: &[Bezier], p: &Path, ctx: &Ctx) -> Relation {
+        // Точные границы кривой (по экстремумам), а не рамка контрольных точек.
+        let tight = p
+            .data()
+            .clone()
+            .transform(ctx.matrix)
+            .and_then(|t| t.compute_tight_bounds())
+            .map(|r| {
+                [
+                    r.left() as f64,
+                    r.top() as f64,
+                    r.right() as f64,
+                    r.bottom() as f64,
+                ]
+            });
+        let Some(mut b) = tight.or_else(|| clip::bbox(base)) else {
+            return Relation::Outside;
+        };
+        if let Some(s) = p.stroke() {
+            let half = s.width().get() as f64 * mean_scale(&ctx.matrix) / 2.0;
+            let reach = match s.linejoin() {
+                LineJoin::Miter | LineJoin::MiterClip => (s.miterlimit().get() as f64).max(1.5),
+                _ => 1.5,
+            };
+            let e = half * reach;
+            b = [b[0] - e, b[1] - e, b[2] + e, b[3] + e];
+        }
+        let rough = ctx.clip.relate(b);
+        // Оценка с запасом говорит «пересекает» — уточняем по реальному
+        // контуру обводки, чтобы не резать то, что на самом деле внутри.
+        if rough != Relation::Crossing {
+            return rough;
+        }
+        let Some(s) = p.stroke() else {
+            return rough;
+        };
+        let Some(exact) = self.stroke_outline(p, s, ctx).and_then(|o| clip::bbox(&o)) else {
+            return rough;
+        };
+        let fill = clip::bbox(base).filter(|_| p.fill().is_some());
+        let b = match fill {
+            Some(f) => [
+                f[0].min(exact[0]),
+                f[1].min(exact[1]),
+                f[2].max(exact[2]),
+                f[3].max(exact[3]),
+            ],
+            None => exact,
+        };
+        ctx.clip.relate(b)
+    }
+
+    /// Элемент, пересекающий границу видимой области: заливка и обводка
+    /// превращаются в области, пересекаются с ней и рисуются заливкой.
+    fn draw_clipped(&mut self, p: &Path, ctx: &Ctx) {
+        let id = p.id();
+        let fill = p.fill().and_then(|f| {
+            let rule = match f.rule() {
+                FillRule::NonZero => FILL_RULE_NONZERO,
+                FillRule::EvenOdd => FILL_RULE_EVENODD,
+            };
+            let base = path_to_beziers(p.data(), &ctx.matrix, &self.round);
+            let area = clip::intersect(&clip::region(&base, rule), &ctx.clip.contours);
+            if area.is_empty() {
+                return None;
+            }
+            let style =
+                self.paint_fill(f.paint(), f.opacity().get(), FILL_RULE_NONZERO, ctx, id)?;
+            Some(group(id, clip::to_beziers(&area, &self.round), vec![style]))
+        });
+        let stroke = p.stroke().and_then(|s| {
+            let outline = self.stroke_outline(p, s, ctx)?;
+            let area = clip::intersect(
+                &clip::region(&outline, FILL_RULE_NONZERO),
+                &ctx.clip.contours,
+            );
+            if area.is_empty() {
+                return None;
+            }
+            let style =
+                self.paint_fill(s.paint(), s.opacity().get(), FILL_RULE_NONZERO, ctx, id)?;
+            Some(group(id, clip::to_beziers(&area, &self.round), vec![style]))
+        });
+        let (bottom, top) = match p.paint_order() {
+            PaintOrder::FillAndStroke => (fill, stroke),
+            PaintOrder::StrokeAndFill => (stroke, fill),
+        };
+        for g in bottom.into_iter().chain(top) {
+            self.push_item(g, ctx);
+        }
+    }
+
+    /// Обводка как залитый контур (с пунктиром), в координатах канваса.
+    fn stroke_outline(&self, p: &Path, s: &usvg::Stroke, ctx: &Ctx) -> Option<Vec<Bezier>> {
+        let resolution = mean_scale(&ctx.matrix).max(1.0) as f32;
+        let dashed = match dash_path(p.data(), s, resolution) {
+            Dashing::Solid => None,
+            Dashing::Dashed(path) => Some(path),
+            Dashing::Invisible => return None,
+        };
+        let source = dashed.as_ref().unwrap_or(p.data());
+        let outline = source.stroke(&s.to_tiny_skia(), resolution)?;
+        Some(path_to_beziers(&outline, &ctx.matrix, &self.round))
+    }
+
     /// Готовит обводку.
     ///
     /// - Пунктир нарезается здесь, а не в плеере: rlottie неточно меряет
@@ -339,6 +429,8 @@ impl Converter {
     ///   в SVG разная в разных направлениях, а rlottie умеет только одинаковую.
     ///   Такая обводка превращается в залитый контур, построенный в исходных
     ///   координатах, — после растяжения он совпадает с SVG.
+    /// - Градиентные обводки Telegram запрещает — они тоже становятся
+    ///   контуром с градиентной заливкой.
     /// - Отрезки нулевой длины со скруглённым или квадратным концом в SVG
     ///   рисуются точкой (точки в иконках, бусины в пунктире «0 6»);
     ///   rlottie их не рисует, они уходят в `dots`.
@@ -352,9 +444,10 @@ impl Converter {
         };
         let source = dashed.as_ref().unwrap_or(p.data());
 
-        if !is_similarity(&m) {
-            return match source.stroke(&s.to_tiny_skia(), resolution) {
-                Some(outline) => StrokeOut::Outline(path_to_beziers(&outline, &m, &self.round)),
+        let gradient = !matches!(s.paint(), Paint::Color(_) | Paint::Pattern(_));
+        if !is_similarity(&m) || gradient {
+            return match self.stroke_outline(p, s, ctx) {
+                Some(outline) => StrokeOut::Outline(outline),
                 None => StrokeOut::None,
             };
         }
@@ -418,10 +511,8 @@ impl Converter {
     fn push_item(&mut self, item: Shape, ctx: &Ctx) {
         let same_layer = self.layers.last().is_some_and(|l| l.key == ctx.layer_key);
         if !same_layer {
-            let masks = self.build_masks(&ctx.masks);
             self.layers.push(LayerDraft {
                 key: ctx.layer_key.clone(),
-                masks,
                 opacity: ctx.layer_opacity.unwrap_or(1.0),
                 items: Vec::new(),
             });
@@ -500,7 +591,9 @@ impl Converter {
                 o,
                 line,
             },
-            PaintOut::Gradient(g) => Shape::GradientStroke { o, g, line },
+            // Градиентные обводки Telegram запрещает: они заранее
+            // превращаются в контур (`stroke_out`) и сюда не попадают.
+            PaintOut::Gradient(_) => return None,
         })
     }
 

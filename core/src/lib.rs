@@ -8,11 +8,13 @@
 //! SVG → нормализация (usvg: `<use>`, CSS, единицы, текст в кривые)
 //! → обход дерева и перевод в Lottie → JSON → gzip.
 
+mod clip;
 mod convert;
 mod geometry;
 mod lottie;
 mod options;
 mod report;
+pub mod telegram;
 
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
@@ -76,7 +78,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
         Optimization::Manual(n) => n,
     };
     let mut conv = convert::Converter::new(decimals);
-    conv.run(tree.root(), fit);
+    conv.run(tree.root(), fit, canvas as f64);
     if conv.is_empty() {
         return Err(Error::Empty);
     }
@@ -87,7 +89,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     for draft in conv.layers.into_iter().rev() {
         let mut items = draft.items;
         items.reverse();
-        let mut layer = lottie::Layer::new(0, frames, items, draft.masks);
+        let mut layer = lottie::Layer::new(0, frames, items);
         layer
             .ks
             .set_opacity(lottie::Rounder::new(3).num(draft.opacity * 100.0));
@@ -116,7 +118,8 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     let json =
         serde_json::to_vec(&animation).expect("сериализация Lottie не может завершиться ошибкой");
 
-    let mut warnings = conv.warnings;
+    let mut warnings = telegram::check_options(options);
+    warnings.extend(conv.warnings);
     let tgs = gzip(&json);
     let limit = options.preset.max_bytes();
     if tgs.len() > limit {
@@ -193,7 +196,7 @@ fn background_layer(rgb: [u8; 3], canvas: u32, frames: u32) -> lottie::Layer {
             Shape::Transform(GroupTransform::default()),
         ],
     };
-    lottie::Layer::new(0, frames, vec![group], vec![])
+    lottie::Layer::new(0, frames, vec![group])
 }
 
 /// gzip с нулевым временем в заголовке: одинаковый вход — одинаковый файл.

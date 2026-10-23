@@ -321,17 +321,93 @@ fn transforms_are_baked() {
 }
 
 #[test]
-fn clip_path_becomes_layer_mask() {
+fn clip_path_is_applied_geometrically() {
+    // Telegram запрещает маски: обрезка выполняется заранее.
     let out = run("clip-path.svg");
     let layers = out.json["layers"].as_array().unwrap();
     assert_eq!(layers.len(), 1);
-    assert_eq!(layers[0]["hasMask"], true);
-    let masks = layers[0]["masksProperties"].as_array().unwrap();
-    assert_eq!(masks.len(), 1);
-    assert_eq!(masks[0]["mode"], "a");
-    // Круг r=35 в квадрате 100 → радиус 179.2 вокруг центра 256.
-    let v = masks[0]["pt"]["k"]["v"].as_array().unwrap();
-    assert!(v.iter().any(|p| close(num(&p[0]), 256.0 + 179.2, 0.01)));
+    assert!(layers[0].get("masksProperties").is_none());
+    assert!(layers[0].get("hasMask").is_none());
+    // Две половинки круга r=35 (в квадрате 100 → радиус 179.2 вокруг 256).
+    let fills = all(&out.json, "fl");
+    assert_eq!(fills.len(), 2);
+    let (x0, y0, x1, y1) = bounds(&out.json);
+    let r = 179.2;
+    for (got, want) in [
+        (x0, 256.0 - r),
+        (y0, 256.0 - r),
+        (x1, 256.0 + r),
+        (y1, 256.0 + r),
+    ] {
+        assert!(close(got, want, 0.2), "границы {x0} {y0} {x1} {y1}");
+    }
+}
+
+/// Возможности Lottie, которые Telegram запрещает в стикерах
+/// (https://core.telegram.org/stickers, «must not use»).
+fn assert_telegram_safe(name: &str, json: &Value) {
+    for ty in ["gs", "mm", "sr", "rp"] {
+        assert!(all(json, ty).is_empty(), "{name}: запрещённый элемент {ty}");
+    }
+    for layer in json["layers"].as_array().unwrap() {
+        assert_eq!(layer["ty"], 4, "{name}: разрешены только слои фигур");
+        assert!(layer.get("masksProperties").is_none(), "{name}: маски");
+        assert!(layer.get("ef").is_none(), "{name}: эффекты слоя");
+        assert_ne!(layer["ddd"], 1, "{name}: 3D");
+    }
+}
+
+#[test]
+fn output_uses_only_features_allowed_by_telegram() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        if !name.ends_with(".svg") || name == "invalid.svg" || name == "empty.svg" {
+            continue;
+        }
+        let out = run(&name);
+        assert_telegram_safe(&name, &out.json);
+        let opts = Options {
+            fit: svg2tgs_core::Fit::Cover,
+            background: Background::Solid("#ffffff".into()),
+            ..Options::default()
+        };
+        assert_telegram_safe(&name, &run_with(&name, &opts).json);
+    }
+}
+
+#[test]
+fn gradient_stroke_becomes_filled_outline() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+        <circle cx="50" cy="50" r="30" fill="none" stroke="url(#g)" stroke-width="8"/></svg>"##;
+    let conv = convert(svg, &Options::default()).unwrap();
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(&conv.tgs[..])
+        .read_to_string(&mut text)
+        .unwrap();
+    let json: Value = serde_json::from_str(&text).unwrap();
+    assert!(all(&json, "gs").is_empty());
+    assert!(all(&json, "st").is_empty());
+    assert_eq!(all(&json, "gf").len(), 1, "контур с градиентной заливкой");
+}
+
+#[test]
+fn content_beyond_canvas_is_cut() {
+    // Режим «заполнить»: широкий рисунок выходит за канвас по бокам.
+    let options = Options {
+        fit: svg2tgs_core::Fit::Cover,
+        ..Options::default()
+    };
+    let out = run_with("units-px.svg", &options);
+    let (x0, y0, x1, y1) = bounds(&out.json);
+    // Допуск обрезки — 1 px за краем канваса (невидимо).
+    assert!(
+        x0 >= -1.0 && y0 >= -1.0 && x1 <= 513.0 && y1 <= 513.0,
+        "{x0} {y0} {x1} {y1}"
+    );
+    // Без обрезки прямоугольник 512×256 при «заполнить» шире канваса вдвое.
+    assert!(x0 > -10.0 && x1 < 520.0);
 }
 
 #[test]

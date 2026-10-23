@@ -16,7 +16,7 @@ pub enum Severity {
 }
 
 /// Код замечания. Новые коды добавляются в конец, старые не меняют смысл.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "code")]
 pub enum WarningCode {
     /// Текст переведён в кривые.
@@ -40,6 +40,12 @@ pub enum WarningCode {
     /// Градиент передан приближённо: перекос или растяжение формы,
     /// повторение (`spreadMethod`) или фокусный радиус.
     GradientApproximated,
+    /// Канвас не того размера, который требует Telegram.
+    CanvasNotAllowed { size: u32, required: u32 },
+    /// Частота кадров не та, которую требует Telegram.
+    FpsNotAllowed { fps: u32, required: u32 },
+    /// Анимация длиннее, чем разрешает Telegram.
+    DurationTooLong { secs: f32, max: f32 },
 }
 
 impl WarningCode {
@@ -52,7 +58,7 @@ impl WarningCode {
 }
 
 /// Одно замечание, опционально привязанное к элементу SVG.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Warning {
     #[serde(flatten)]
     pub code: WarningCode,

@@ -29,6 +29,15 @@ pub fn warning(w: &Warning) -> String {
             "сложная вложенная обрезка передана приближённо".to_string()
         }
         WarningCode::GradientApproximated => "градиент передан приближённо".to_string(),
+        WarningCode::CanvasNotAllowed { size, required } => {
+            format!("канвас {size}×{size}, а Telegram требует {required}×{required}")
+        }
+        WarningCode::FpsNotAllowed { fps, required } => {
+            format!("{fps} кадров/с, а Telegram требует {required}")
+        }
+        WarningCode::DurationTooLong { secs, max } => {
+            format!("длительность {secs:.2} с, а Telegram разрешает не больше {max:.0} с")
+        }
     };
     match &w.element_id {
         Some(id) => format!("{text} (элемент «{id}»)"),

@@ -109,7 +109,6 @@ impl Default for LayerTransform {
 
 /// Слой с фигурами (`ty: 4`).
 #[derive(Debug, Serialize)]
-#[allow(non_snake_case)]
 pub struct Layer {
     pub ddd: u8,
     pub ind: u32,
@@ -119,10 +118,6 @@ pub struct Layer {
     pub sr: u8,
     pub ks: LayerTransform,
     pub ao: u8,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub hasMask: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub masksProperties: Vec<Mask>,
     pub shapes: Vec<Shape>,
     pub ip: Num,
     pub op: Num,
@@ -131,7 +126,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(ind: u32, frames: u32, shapes: Vec<Shape>, masks: Vec<Mask>) -> Self {
+    pub fn new(ind: u32, frames: u32, shapes: Vec<Shape>) -> Self {
         Self {
             ddd: 0,
             ind,
@@ -140,36 +135,11 @@ impl Layer {
             sr: 1,
             ks: LayerTransform::default(),
             ao: 0,
-            hasMask: !masks.is_empty(),
-            masksProperties: masks,
             shapes,
             ip: Num(0.0),
             op: Num(frames as f64),
             st: 0,
             bm: 0,
-        }
-    }
-}
-
-/// Маска слоя — так в Lottie делается обрезка (clipPath).
-#[derive(Debug, Serialize)]
-pub struct Mask {
-    pub inv: bool,
-    /// `a` — сложение, `i` — пересечение.
-    pub mode: &'static str,
-    pub pt: Static<Bezier>,
-    pub o: Static<Num>,
-    pub x: Static<Num>,
-}
-
-impl Mask {
-    pub fn new(mode: &'static str, path: Bezier) -> Self {
-        Self {
-            inv: false,
-            mode,
-            pt: Static::new(path),
-            o: Static::new(Num(100.0)),
-            x: Static::new(Num(0.0)),
         }
     }
 }
@@ -212,14 +182,6 @@ pub enum Shape {
     Stroke {
         c: Static<[Num; 4]>,
         o: Static<Num>,
-        #[serde(flatten)]
-        line: Line,
-    },
-    #[serde(rename = "gs")]
-    GradientStroke {
-        o: Static<Num>,
-        #[serde(flatten)]
-        g: Gradient,
         #[serde(flatten)]
         line: Line,
     },
