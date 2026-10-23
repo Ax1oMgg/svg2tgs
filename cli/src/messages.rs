@@ -35,6 +35,9 @@ pub fn warning(w: &Warning) -> String {
         WarningCode::FpsNotAllowed { fps, required } => {
             format!("{fps} кадров/с, а Telegram требует {required}")
         }
+        WarningCode::Simplified { tolerance } => format!(
+            "чтобы уложиться в лимит, контуры упрощены (отклонение до {tolerance} px из 512)"
+        ),
         WarningCode::DurationTooLong { secs, max } => {
             format!("длительность {secs:.2} с, а Telegram разрешает не больше {max:.0} с")
         }

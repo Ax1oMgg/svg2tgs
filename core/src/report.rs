@@ -46,12 +46,17 @@ pub enum WarningCode {
     FpsNotAllowed { fps: u32, required: u32 },
     /// Анимация длиннее, чем разрешает Telegram.
     DurationTooLong { secs: f32, max: f32 },
+    /// Чтобы уложиться в лимит размера, контуры упрощены: отклонение
+    /// не больше `tolerance` пикселей канваса 512.
+    Simplified { tolerance: f32 },
 }
 
 impl WarningCode {
     pub fn severity(&self) -> Severity {
         match self {
             WarningCode::TextConvertedToPaths => Severity::Info,
+            // Меньше полупикселя на канвасе 512 на глаз не видно.
+            WarningCode::Simplified { tolerance } if *tolerance < 0.5 => Severity::Info,
             _ => Severity::Warning,
         }
     }

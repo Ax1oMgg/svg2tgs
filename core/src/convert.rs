@@ -54,9 +54,9 @@ pub struct Converter {
 }
 
 impl Converter {
-    pub fn new(decimals: u8) -> Self {
+    pub fn new(round: Rounder) -> Self {
         Self {
-            round: Rounder::new(decimals),
+            round,
             round_color: Rounder::new(3),
             layers: Vec::new(),
             warnings: Vec::new(),

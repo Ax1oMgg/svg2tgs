@@ -221,6 +221,7 @@ pub fn to_beziers(region: &Contours, round: &Rounder) -> Vec<Bezier> {
     let mut out = Vec::with_capacity(region.len());
     let mut current: Option<[Num; 2]> = None;
     for c in region.iter().filter(|c| c.len() >= 3) {
+        let c = crate::geometry::simplify_polygon(c, round.tolerance);
         let mut v: Vec<[Num; 2]> = c.iter().map(|p| round.pt(*p)).collect();
         if let Some(cur) = current {
             let near =

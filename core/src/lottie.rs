@@ -20,16 +20,28 @@ impl Serialize for Num {
     }
 }
 
-/// Округление до заданного числа знаков; `-0` превращается в `0`.
+/// Точность записи геометрии: округление до заданного числа знаков
+/// (`-0` превращается в `0`) и допуск упрощения контуров в пикселях.
 #[derive(Debug, Clone, Copy)]
 pub struct Rounder {
     factor: f64,
+    /// Насколько упрощённый контур может отойти от исходного, пиксели.
+    /// 0 — не упрощать.
+    pub tolerance: f64,
 }
 
 impl Rounder {
     pub fn new(decimals: u8) -> Self {
         Self {
             factor: 10f64.powi(decimals.min(6) as i32),
+            tolerance: 0.0,
+        }
+    }
+
+    pub fn with_tolerance(decimals: u8, tolerance: f64) -> Self {
+        Self {
+            tolerance,
+            ..Self::new(decimals)
         }
     }
 
