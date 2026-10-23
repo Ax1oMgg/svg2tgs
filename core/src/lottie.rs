@@ -265,15 +265,6 @@ pub struct Line {
     pub lj: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ml: Option<Num>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub d: Vec<Dash>,
-}
-
-/// Элемент пунктира: `d` — штрих, `g` — промежуток, `o` — смещение.
-#[derive(Debug, Serialize)]
-pub struct Dash {
-    pub n: &'static str,
-    pub v: Static<Num>,
 }
 
 /// Тождественное преобразование группы — координаты уже «запечены».
