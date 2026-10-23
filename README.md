@@ -11,8 +11,9 @@
 ```sh
 cargo run --release -p svg2tgs-cli -- папка_с_svg -o папка_для_tgs
 ```
-Параметры: `--preset sticker|emoji`, `-r` — вложенные папки, `--padding`,
-`--fit`, `--bg`, `--optimize`, `--fps`, `--duration` (подробно — `--help`).
+Параметры: `--preset sticker|emoji`, `-r` — вложенные папки, `--on-conflict`,
+`--padding`, `--fit`, `--bg`, `--optimize`, `--fps`, `--duration`,
+`--json` — отчёт для скриптов (подробно — `--help`).
 
 ## Структура
 
