@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 120 60">
+  <defs>
+    <symbol id="star" viewBox="0 0 24 24">
+      <path d="M12 2l3 7h7l-5.5 4.5L18.5 21 12 16.5 5.5 21l2-7.5L2 9h7z"/>
+    </symbol>
+    <circle id="dot" r="6"/>
+  </defs>
+  <use href="#star" x="0" y="10" width="40" height="40" fill="#f5b400"/>
+  <use xlink:href="#star" x="40" y="10" width="40" height="40" fill="#e8505b"/>
+  <use href="#dot" x="100" y="30" fill="#2f81f7"/>
+</svg>

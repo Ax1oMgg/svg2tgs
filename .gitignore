@@ -1,0 +1,22 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+app/dist/
+
+# Tauri: генерируется при сборке
+app/src-tauri/gen/
+
+# Результаты локальных прогонов
+/out/
+*.tgs
+!tests/expected/**/*.tgs
+
+# Системное
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json
+.idea/
