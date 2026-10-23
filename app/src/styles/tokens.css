@@ -6,83 +6,132 @@
  */
 
 :root {
-  /* Цвета: светлая тема */
-  --color-bg: #f4f5f7;
+  /* Основа: холодная бумага, белые поверхности, «чернила» */
+  --color-bg: #eef1f4;
   --color-surface: #ffffff;
-  --color-surface-muted: #eef0f3;
-  --color-border: #dde1e7;
-  --color-text: #1b1f24;
-  --color-text-muted: #5b6573;
-  --color-accent: #2f81f7;
-  --color-accent-text: #ffffff;
-  --color-success: #1f9d55;
-  --color-warning: #c47f00;
-  --color-danger: #d1242f;
+  --color-surface-muted: #f5f7f9;
+  --color-border: #dce1e7;
+  --color-border-strong: #c5ccd5;
+  --color-text: #17202b;
+  --color-text-muted: #5d6877;
 
-  /* Фоны превью «как в Telegram» */
-  --color-chat-light: #dbe6c8;
+  /* Акцент: глубокий кобальт */
+  --color-accent: #3157d5;
+  --color-accent-hover: #2847b8;
+  --color-accent-soft: #dce4fb;
+  --color-on-accent: #ffffff;
+  --color-focus: #3157d5;
+
+  /* Статусы файлов */
+  --color-success: #1e9e62;
+  --color-success-soft: #dcf3e8;
+  --color-warning: #b97a00;
+  --color-warning-soft: #fbefd2;
+  --color-danger: #d3364a;
+  --color-danger-soft: #fbe0e4;
+
+  /* Сцена «как в чате» */
+  --color-chat-light: #cfdcc4;
+  --color-chat-light-dots: #c2d1b5;
   --color-chat-dark: #0e1621;
+  --color-chat-dark-dots: #142030;
+  --color-bubble-in-light: #ffffff;
+  --color-bubble-out-light: #e2f7cf;
+  --color-bubble-in-dark: #182533;
+  --color-bubble-out-dark: #2b5278;
+  --color-bubble-text-light: #17202b;
+  --color-bubble-text-dark: #e9eef4;
 
-  /* Типографика */
-  --font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-mono: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
-  --font-size-sm: 12px;
+  /* Шахматка прозрачности */
+  --color-checker-a: #ffffff;
+  --color-checker-b: #e4e8ec;
+
+  /* Типографика: системный шрифт — родной в каждой ОС, без сети */
+  --font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "SF Pro Text",
+    Roboto, "Noto Sans", sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12.5px;
   --font-size-md: 14px;
-  --font-size-lg: 18px;
-  --font-size-xl: 24px;
+  --font-size-lg: 17px;
+  --font-size-xl: 26px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
-  --font-weight-bold: 600;
+  --font-weight-bold: 650;
+  --line-height: 1.45;
 
   /* Отступы */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
 
-  /* Радиусы */
+  /* Радиусы: мелкие элементы — меньше, крупные — больше */
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+  --radius-bubble: 16px;
 
-  /* Тени */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  /* Размеры колонок */
+  --width-files: 290px;
+  --width-settings: 280px;
+  --height-topbar: 52px;
+
+  --shadow-dialog: 0 18px 50px rgb(16 24 40 / 0.22);
 
   color-scheme: light;
 }
 
-/* Тёмная тема: по системе, если пользователь не выбрал светлую явно */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --color-bg: #0f1216;
-    --color-surface: #171b21;
-    --color-surface-muted: #1f242c;
-    --color-border: #2c333d;
-    --color-text: #e6e9ee;
-    --color-text-muted: #9aa4b2;
-    --color-accent: #4c94ff;
-    --color-success: #3fb871;
-    --color-warning: #e3a82b;
-    --color-danger: #f0545e;
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --color-bg: #0f141a;
+    --color-surface: #161c24;
+    --color-surface-muted: #1b222c;
+    --color-border: #262f3b;
+    --color-border-strong: #364252;
+    --color-text: #e6ebf1;
+    --color-text-muted: #95a1b0;
+    --color-accent: #6d8cf2;
+    --color-accent-hover: #86a0f5;
+    --color-accent-soft: #1f2a4d;
+    --color-on-accent: #0f141a;
+    --color-focus: #86a0f5;
+    --color-success: #3bbf80;
+    --color-success-soft: #123326;
+    --color-warning: #e3a630;
+    --color-warning-soft: #3a2c0c;
+    --color-danger: #f0606f;
+    --color-danger-soft: #3d151c;
+    --color-checker-a: #20262f;
+    --color-checker-b: #2a313b;
+    --shadow-dialog: 0 18px 50px rgb(0 0 0 / 0.5);
     color-scheme: dark;
   }
 }
 
-/* Тёмная тема, выбранная явно в настройках */
 :root[data-theme="dark"] {
-  --color-bg: #0f1216;
-  --color-surface: #171b21;
-  --color-surface-muted: #1f242c;
-  --color-border: #2c333d;
-  --color-text: #e6e9ee;
-  --color-text-muted: #9aa4b2;
-  --color-accent: #4c94ff;
-  --color-success: #3fb871;
-  --color-warning: #e3a82b;
-  --color-danger: #f0545e;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --color-bg: #0f141a;
+  --color-surface: #161c24;
+  --color-surface-muted: #1b222c;
+  --color-border: #262f3b;
+  --color-border-strong: #364252;
+  --color-text: #e6ebf1;
+  --color-text-muted: #95a1b0;
+  --color-accent: #6d8cf2;
+  --color-accent-hover: #86a0f5;
+  --color-accent-soft: #1f2a4d;
+  --color-on-accent: #0f141a;
+  --color-focus: #86a0f5;
+  --color-success: #3bbf80;
+  --color-success-soft: #123326;
+  --color-warning: #e3a630;
+  --color-warning-soft: #3a2c0c;
+  --color-danger: #f0606f;
+  --color-danger-soft: #3d151c;
+  --color-checker-a: #20262f;
+  --color-checker-b: #2a313b;
+  --shadow-dialog: 0 18px 50px rgb(0 0 0 / 0.5);
   color-scheme: dark;
 }

@@ -1,0 +1,75 @@
+/** Типы, общие для интерфейса и Rust-части (совпадают с serde в core). */
+
+export type Preset = "sticker" | "emoji";
+export type Fit = "contain" | "cover";
+
+export type Background = { kind: "transparent" } | { kind: "solid"; color: string };
+
+export type Optimization =
+  | { mode: "auto" }
+  | { mode: "lossless" }
+  | { mode: "manual"; precision: number };
+
+/** Параметры конвертации — `svg2tgs_core::Options`. */
+export interface Options {
+  preset: Preset;
+  /** Доля стороны, 0–0.2. */
+  padding: number;
+  fit: Fit;
+  background: Background;
+  optimization: Optimization;
+  fps?: number | null;
+  duration_secs?: number | null;
+}
+
+/** Замечание ядра: код плюс параметры (`svg2tgs_core::Warning`). */
+export interface Warning {
+  code: string;
+  element_id?: string | null;
+  [param: string]: unknown;
+}
+
+/** Итог конвертации одного файла. */
+export interface Outcome {
+  id: string;
+  tgsBytes: number | null;
+  warnings: Warning[];
+  error: string | null;
+}
+
+export type Source = { kind: "path"; path: string } | { kind: "text"; text: string };
+
+export type Status = "pending" | "ok" | "warn" | "error";
+
+/** Файл в списке. */
+export interface FileItem {
+  id: string;
+  /** Имя для показа, с расширением. */
+  name: string;
+  source: Source;
+  status: Status;
+  outcome?: Outcome;
+  /** Миниатюра результата (data-URL). */
+  thumb?: string;
+}
+
+export interface SaveRequest {
+  id: string;
+  name: string;
+}
+
+export type Conflict = "overwrite" | "skip" | "number";
+
+export interface Saved {
+  id: string;
+  status: "saved" | "skipped" | "failed";
+  path: string | null;
+}
+
+export const DEFAULT_OPTIONS: Options = {
+  preset: "sticker",
+  padding: 0,
+  fit: "contain",
+  background: { kind: "transparent" },
+  optimization: { mode: "auto" },
+};

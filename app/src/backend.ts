@@ -7,12 +7,18 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import type { Conflict, Options, Outcome, SaveRequest, Saved, Source } from "./types";
 
 export interface AppInfo {
   version: string;
   coreVersion: string;
   /** "tauri" — настоящее приложение, "browser" — режим с тестовыми данными. */
   runtime: "tauri" | "browser";
+}
+
+export interface Entry {
+  path: string;
+  name: string;
 }
 
 export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
@@ -24,3 +30,122 @@ export async function getAppInfo(): Promise<AppInfo> {
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
 }
+
+export async function startupPaths(): Promise<string[]> {
+  return isTauri() ? invoke<string[]>("startup_paths") : [];
+}
+
+export async function expandPaths(paths: string[], recursive: boolean): Promise<Entry[]> {
+  return isTauri() ? invoke<Entry[]>("expand_paths", { paths, recursive }) : [];
+}
+
+export async function convert(id: string, source: Source, options: Options): Promise<Outcome> {
+  if (isTauri()) return invoke<Outcome>("convert", { id, source, options });
+  return mock.convert(id, source, options);
+}
+
+/** Картинка превью (data-URL PNG) или `null`. */
+export async function preview(id: string, kind: "svg" | "tgs", size: number): Promise<string | null> {
+  if (isTauri()) return invoke<string | null>("preview", { id, kind, size });
+  return mock.preview(id);
+}
+
+export async function forget(ids: string[]): Promise<void> {
+  if (isTauri()) await invoke("forget", { ids });
+  else ids.forEach((id) => mock.svgs.delete(id));
+}
+
+export async function defaultOutputDir(sourcePath: string): Promise<string | null> {
+  return isTauri() ? invoke<string | null>("default_output_dir", { sourcePath }) : null;
+}
+
+export async function save(requests: SaveRequest[], dir: string, conflict: Conflict): Promise<Saved[]> {
+  if (isTauri()) return invoke<Saved[]>("save", { requests, dir, conflict });
+  return requests.map((r) => ({ id: r.id, status: "saved", path: `${dir}/${r.name}.tgs` }));
+}
+
+export async function openFolder(path: string): Promise<void> {
+  if (isTauri()) await invoke("open_folder", { path });
+}
+
+/** Системный диалог: выбрать SVG-файлы или папку. */
+export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
+  if (!isTauri()) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open(
+    kind === "files"
+      ? { multiple: true, filters: [{ name: "SVG", extensions: ["svg"] }] }
+      : { directory: true, multiple: false },
+  );
+  if (!picked) return [];
+  return Array.isArray(picked) ? picked : [picked];
+}
+
+/** Системный диалог: выбрать папку для сохранения. */
+export async function pickFolder(defaultPath?: string): Promise<string | null> {
+  if (!isTauri()) return defaultPath ?? "~/tgs";
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({ directory: true, multiple: false, defaultPath });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Подписка на перетаскивание файлов в окно. Возвращает отписку. */
+export async function onFileDrop(handlers: {
+  over: (active: boolean) => void;
+  drop: (paths: string[]) => void;
+}): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload;
+    if (p.type === "enter" || p.type === "over") handlers.over(true);
+    else if (p.type === "leave") handlers.over(false);
+    else if (p.type === "drop") {
+      handlers.over(false);
+      handlers.drop(p.paths);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Тестовые данные для браузерного режима                                     */
+/* ------------------------------------------------------------------------- */
+
+const SAMPLE_SVGS: Record<string, string> = {
+  "heart.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#e8505b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-4.35-7-10a4 4 0 0 1 7-2.65A4 4 0 0 1 19 11c0 5.65-7 10-7 10z"/></svg>`,
+  "star.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#f5b400" d="M12 2l3 7h7l-5.5 4.5L18.5 21 12 16.5 5.5 21l2-7.5L2 9h7z"/></svg>`,
+  "rocket.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path fill="#3157d5" d="M32 4c10 8 14 20 12 34H20C18 24 22 12 32 4z"/><circle cx="32" cy="24" r="6" fill="#fff"/><path fill="#f08c2a" d="M24 40h16l-8 18z"/></svg>`,
+  "shadow.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="38" fill="#1e9e62"/><circle cx="38" cy="42" r="6" fill="#fff"/><circle cx="62" cy="42" r="6" fill="#fff"/></svg>`,
+  "broken.svg": "не svg",
+};
+
+const mock = {
+  svgs: new Map<string, string>(),
+
+  async convert(id: string, source: Source, options: Options): Promise<Outcome> {
+    await new Promise((r) => setTimeout(r, 150 + Math.random() * 250));
+    const text =
+      source.kind === "text"
+        ? source.text
+        : SAMPLE_SVGS[source.path.split("/").pop() ?? ""] ?? SAMPLE_SVGS["star.svg"];
+    if (!text.includes("<svg")) {
+      return { id, tgsBytes: null, warnings: [], error: "invalid_svg" };
+    }
+    mock.svgs.set(id, text);
+    const warnings =
+      source.kind === "path" && source.path.endsWith("shadow.svg")
+        ? [{ code: "filter_removed", filter: "drop_shadow", element_id: "shadow" }]
+        : options.preset === "emoji" && text.includes("stroke-width")
+          ? [{ code: "thin_lines_for_emoji", width: 8.5, recommended: 12 }]
+          : [];
+    return { id, tgsBytes: 300 + text.length * 2, warnings, error: null };
+  },
+
+  async preview(id: string): Promise<string | null> {
+    const svg = mock.svgs.get(id);
+    return svg ? `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` : null;
+  },
+};
+
+/** Файлы для демонстрации в браузерном режиме. */
+export const SAMPLE_PATHS = Object.keys(SAMPLE_SVGS).map((n) => `/demo/${n}`);
