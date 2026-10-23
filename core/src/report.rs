@@ -33,6 +33,15 @@ pub enum WarningCode {
     BlendModeIgnored { mode: String },
     /// Файл превышает лимит пресета.
     SizeOverLimit { bytes: usize, limit: usize },
+    /// Текст не удалось перевести в кривые (нет подходящего шрифта) — он пропущен.
+    TextDropped,
+    /// Вложенная обрезка сложной формы передана приближённо.
+    ClipApproximated,
+    /// Градиент передан приближённо: перекос или растяжение формы,
+    /// повторение (`spreadMethod`) или фокусный радиус.
+    GradientApproximated,
+    /// Обводка под неравномерным растяжением передана с одинаковой толщиной.
+    StrokeApproximated,
 }
 
 impl WarningCode {

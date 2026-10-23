@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Подпуть начинается там, где закончился предыдущий (…Z m0 0 …):
+       rlottie склеивает такие подпути, конвертер меняет точку старта -->
+  <path d="M4 12h4v6H4zm0 0a8 8 0 0 1 16 0m0 0v6h-4v-6z"/>
+</svg>
