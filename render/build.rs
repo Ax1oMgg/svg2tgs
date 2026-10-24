@@ -37,6 +37,11 @@ fn main() {
         .include(&out)
         .include(root.join("inc"))
         .warnings(false)
+        // Макросы «собираем саму библиотеку»: RLOTTIE_BUILD — у Samsung,
+        // LOT_BUILD — у форка Telegram. Без них на Windows функции объявлены
+        // как __declspec(dllimport), и MSVC отказывается их определять
+        // (ошибка C2491). Библиотека статическая, экспорт ни на что не влияет.
+        .define("RLOTTIE_BUILD", None)
         .define("LOT_BUILD", None)
         .define("LOTTIE_DISABLE_ARM_NEON", None);
     for dir in [
@@ -56,7 +61,9 @@ fn main() {
     }
 
     if build.get_compiler().is_like_msvc() {
-        build.flag("/std:c++14").flag("/EHs-c-").flag("/GR-");
+        // Исключения и RTTI на MSVC оставляем как в cmake-сборке rlottie:
+        // стандартная библиотека MSVC без них выдаёт предупреждения C4530.
+        build.flag("/std:c++14").flag("/EHsc");
     } else {
         build
             .flag("-std=c++14")
