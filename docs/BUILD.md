@@ -24,6 +24,9 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
 
 ## Запуск в режиме разработки
 
+В PowerShell на Windows вместо `npm` пишите `npm.cmd`, если появляется
+ошибка «выполнение сценариев отключено в этой системе».
+
 ```sh
 cd app
 npm install
@@ -37,7 +40,7 @@ npm run tauri dev
 cd app
 npm run dev
 ```
-и открыть http://localhost:1420
+и открыть http://127.0.0.1:1420
 
 ## Сборка установщиков
 
