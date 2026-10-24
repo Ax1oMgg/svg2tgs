@@ -36,7 +36,10 @@ export function SaveDialog(p: Props) {
         <div className="field__label">{t.folder}</div>
         <div className="row">
           <output className="path" title={p.dir ?? ""}>
-            {p.dir ?? t.chooseFolderFirst}
+            {/* Контейнер rtl обрезает длинный путь слева, а dir="ltr" внутри
+                сохраняет порядок символов: без него «/» в начале пути
+                переезжал в конец («home/user/tgs/»). */}
+            <span dir="ltr">{p.dir ?? t.chooseFolderFirst}</span>
           </output>
           <button type="button" className="btn btn--outline" onClick={p.onChooseDir}>
             {t.choose}
