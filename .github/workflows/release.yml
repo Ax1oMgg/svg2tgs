@@ -1,0 +1,153 @@
+# Выпуск: метка vX.Y.Z → черновик релиза с установщиками для всех ОС.
+# Порядок выпуска — docs/RELEASE.md. Опубликовать черновик — вручную на GitHub.
+name: Выпуск
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Черновик релиза
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия в метке совпадает с Cargo.toml
+        id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Метка v$tag, а в Cargo.toml версия $ver"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Создать черновик
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+          gh release create "$GITHUB_REF_NAME" --draft --title "svg2tgs ${{ steps.v.outputs.version }}" \
+            --notes-file .github/release-notes.md
+
+  build:
+    name: ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            kind: windows
+          - name: Windows, офлайн
+            os: windows-latest
+            kind: windows-offline
+          - name: macOS
+            os: macos-latest
+            kind: macos
+          - name: Linux
+            os: ubuntu-22.04
+            kind: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      VER: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Библиотеки для Tauri (Linux)
+        if: matrix.kind == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.kind == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.kind }}
+
+      - name: Зависимости интерфейса
+        working-directory: app
+        run: npm ci
+
+      - name: Установщик
+        working-directory: app
+        run: |
+          case "${{ matrix.kind }}" in
+            windows)         npm run tauri build -- --bundles nsis ;;
+            windows-offline) npm run tauri build -- --bundles nsis --config src-tauri/tauri.windows-offline.conf.json ;;
+            macos)           npm run tauri build -- --bundles dmg --target universal-apple-darwin ;;
+            linux)           npm run tauri build -- --bundles deb,appimage ;;
+          esac
+
+      - name: Командная строка
+        if: matrix.kind != 'windows-offline'
+        run: |
+          case "${{ matrix.kind }}" in
+            macos)
+              cargo build --release -p svg2tgs-cli --target aarch64-apple-darwin
+              cargo build --release -p svg2tgs-cli --target x86_64-apple-darwin
+              lipo -create -output svg2tgs \
+                target/aarch64-apple-darwin/release/svg2tgs target/x86_64-apple-darwin/release/svg2tgs ;;
+            *)
+              cargo build --release -p svg2tgs-cli ;;
+          esac
+
+      - name: Собрать файлы релиза
+        run: |
+          mkdir -p dist
+          b=target/release/bundle
+          case "${{ matrix.kind }}" in
+            windows)
+              cp "$b"/nsis/*-setup.exe "dist/svg2tgs_${VER}_windows_x64-setup.exe"
+              cp target/release/svg2tgs.exe dist/ && cp LICENSE THIRD_PARTY_NOTICES.md dist/
+              (cd dist && 7z a "svg2tgs-cli_${VER}_windows_x64.zip" svg2tgs.exe LICENSE THIRD_PARTY_NOTICES.md && rm svg2tgs.exe LICENSE THIRD_PARTY_NOTICES.md) ;;
+            windows-offline)
+              cp "$b"/nsis/*-setup.exe "dist/svg2tgs_${VER}_windows_x64-offline-setup.exe" ;;
+            macos)
+              cp target/universal-apple-darwin/release/bundle/dmg/*.dmg "dist/svg2tgs_${VER}_macos_universal.dmg"
+              tar czf "dist/svg2tgs-cli_${VER}_macos_universal.tar.gz" svg2tgs LICENSE THIRD_PARTY_NOTICES.md ;;
+            linux)
+              cp "$b"/deb/*.deb "dist/svg2tgs_${VER}_linux_amd64.deb"
+              cp "$b"/appimage/*.AppImage "dist/svg2tgs_${VER}_linux_amd64.AppImage"
+              tar czf "dist/svg2tgs-cli_${VER}_linux_x86_64.tar.gz" -C target/release svg2tgs -C "$GITHUB_WORKSPACE" LICENSE THIRD_PARTY_NOTICES.md ;;
+          esac
+          ls -la dist
+
+      - name: Загрузить в релиз
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  checksums:
+    name: Контрольные суммы
+    needs: build
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: SHA-256 всех файлов
+        run: |
+          mkdir files && cd files
+          gh release download "$GITHUB_REF_NAME" --pattern 'svg2tgs*'
+          sha256sum svg2tgs* > SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
