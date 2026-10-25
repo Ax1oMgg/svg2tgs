@@ -24,7 +24,13 @@ pub fn compare(a: &Image, b: &Image) -> Diff {
     );
     let mut sum = 0u64;
     let mut bad = 0u64;
-    for (pa, pb) in a.rgba.chunks_exact(4).zip(b.rgba.chunks_exact(4)) {
+    for (pa, pb) in a
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.rgba.as_chunks::<4>().0)
+    {
         let mut worst = 0i32;
         for bg in [255i32, 0] {
             for c in 0..3 {
@@ -99,7 +105,7 @@ mod tests {
 
     fn solid(c: [u8; 4]) -> Image {
         let mut img = Image::new(4, 4);
-        for p in img.rgba.chunks_exact_mut(4) {
+        for p in img.rgba.as_chunks_mut::<4>().0.iter_mut() {
             p.copy_from_slice(&c);
         }
         img
