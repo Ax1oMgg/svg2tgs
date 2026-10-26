@@ -4,7 +4,8 @@
 (формат TGS). Windows, macOS и Linux. Работает полностью локально.
 
 > Статус: **этап 7 — установщики** для Windows, macOS и Linux собираются
-> на GitHub при выпуске версии. Функционал — в [`docs/SPEC.md`](docs/SPEC.md).
+> на GitHub при выпуске версии. Функционал — в [`docs/SPEC.md`](docs/SPEC.md),
+> план развития — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Установка
 
