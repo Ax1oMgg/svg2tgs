@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
+import { Dropdown } from "./Dropdown";
+import { SegButton } from "./Preview";
 import type { Theme } from "../prefs";
 
 interface Props {
@@ -61,24 +63,27 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
       </div>
 
       <div className="field">
-        <label className="field__label" htmlFor="settings-lang">
-          {t.language}
-        </label>
-        <select id="settings-lang" value={draftLang} onChange={(e) => setDraftLang(e.target.value as Lang)}>
-          <option value="ru">Русский</option>
-          <option value="en">English</option>
-        </select>
+        <div className="field__label">{t.language}</div>
+        <Dropdown
+          label={t.language}
+          value={draftLang}
+          options={[
+            { value: "ru", label: "Русский" },
+            { value: "en", label: "English" },
+          ]}
+          onChange={setDraftLang}
+        />
       </div>
 
       <div className="field">
-        <label className="field__label" htmlFor="settings-theme">
-          {t.theme}
-        </label>
-        <select id="settings-theme" value={draftTheme} onChange={(e) => setDraftTheme(e.target.value as Theme)}>
-          <option value="system">{t.themeSystem}</option>
-          <option value="light">{t.themeLight}</option>
-          <option value="dark">{t.themeDark}</option>
-        </select>
+        <div className="field__label">{t.theme}</div>
+        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.theme}>
+          {(["system", "light", "dark"] as const).map((v) => (
+            <SegButton key={v} active={draftTheme === v} onClick={() => setDraftTheme(v)}>
+              {v === "system" ? t.themeSystem : v === "light" ? t.themeLight : t.themeDark}
+            </SegButton>
+          ))}
+        </div>
       </div>
 
       <section className="about" aria-label={t.about}>
@@ -91,13 +96,22 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
           {t.aboutAuthor}
           <br />
           {t.aboutLicense}
+          <br />
+          {/* Ссылка текстом: открывается в браузере пользователя. */}
+          <a
+            className="text-link"
+            href={backend.PROJECT_URL}
+            onClick={(e) => {
+              e.preventDefault();
+              void backend.openProjectPage();
+            }}
+          >
+            {t.projectPage}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            </svg>
+          </a>
         </p>
-        <button type="button" className="btn btn--link" onClick={() => void backend.openProjectPage()}>
-          {t.projectPage}
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          </svg>
-        </button>
       </section>
 
       <div className="dialog__actions">

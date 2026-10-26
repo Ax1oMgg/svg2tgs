@@ -22,6 +22,16 @@ use std::sync::{Arc, OnceLock};
 use usvg::Transform;
 
 pub use options::{Background, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE};
+
+/// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPlan {
+    pub fill: Option<[u8; 3]>,
+    /// Цвет и толщина рамки; рамка лежит внутри канваса.
+    pub border: Option<([u8; 3], f64)>,
+    /// Радиус скругления внешнего края, не больше половины канваса.
+    pub radius: f64,
+}
 pub use report::{Conversion, Severity, Warning, WarningCode};
 /// usvg той же версии, что использует ядро, — для рендера эталона (resvg).
 pub use usvg;
@@ -163,7 +173,7 @@ const AUTO_LADDER: [(u8, f64); 7] = [
 
 /// Конвертирует SVG (содержимое файла) в TGS.
 pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
-    let background = parse_background(&options.background)?;
+    let background = background_plan(options)?;
     let outline = match &options.outline {
         Some(o) if options.outline_width() > 0.0 => Some(parse_color(&o.color, "обводки")?),
         _ => None,
@@ -257,7 +267,7 @@ struct Built {
 fn build(
     tree: &usvg::Tree,
     options: &Options,
-    background: Option<[u8; 3]>,
+    background: BackgroundPlan,
     outline: Option<[u8; 3]>,
     decimals: u8,
     tolerance: f64,
@@ -297,12 +307,16 @@ fn build(
         );
         if !area.is_empty() {
             let beziers = clip::to_beziers(&area, &round);
-            layers.push(fill_layer("outline", beziers, color, frames));
+            layers.push(fill_layer(
+                "outline",
+                beziers,
+                color,
+                lottie::FILL_RULE_NONZERO,
+                frames,
+            ));
         }
     }
-    if let Some(color) = background {
-        layers.push(background_layer(color, canvas, frames));
-    }
+    layers.extend(background_layers(&background, canvas, frames));
     for (n, layer) in layers.iter_mut().enumerate() {
         layer.ind = n as u32 + 1;
     }
@@ -373,18 +387,85 @@ fn parse_color(s: &str, what: &str) -> Result<[u8; 3], Error> {
     Ok([ch(0)?, ch(2)?, ch(4)?])
 }
 
-fn background_layer(rgb: [u8; 3], canvas: u32, frames: u32) -> lottie::Layer {
-    use lottie::{Bezier, Num};
-    let c = canvas as f64;
-    let rect = Bezier {
-        c: true,
-        v: [[0.0, 0.0], [c, 0.0], [c, c], [0.0, c]]
-            .map(|[x, y]| [Num(x), Num(y)])
-            .to_vec(),
-        i: vec![[Num(0.0); 2]; 4],
-        o: vec![[Num(0.0); 2]; 4],
+/// Параметры фона из настроек: цвета проверены, радиус и толщина ограничены.
+pub fn background_plan(options: &Options) -> Result<BackgroundPlan, Error> {
+    let half = options.effective_canvas_size() as f64 / 2.0;
+    let border = match &options.background_border {
+        Some(b) if b.width > 0.0 => Some((
+            parse_color(&b.color, "рамки фона")?,
+            (b.width.min(MAX_OUTLINE) as f64).min(half),
+        )),
+        _ => None,
     };
-    fill_layer("background", vec![rect], rgb, frames)
+    Ok(BackgroundPlan {
+        fill: parse_background(&options.background)?,
+        border,
+        radius: (options.background_radius.max(0.0) as f64).min(half),
+    })
+}
+
+/// Квадрат `[x0, y0]–[x1, y1]` со скруглёнными углами радиуса `r`,
+/// по часовой стрелке (в осях канваса). Дуги — кубические кривые.
+fn rounded_rect(x0: f64, y0: f64, x1: f64, y1: f64, r: f64) -> lottie::Bezier {
+    use lottie::{Bezier, Num};
+    let r = r.max(0.0).min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
+    let pt = |x: f64, y: f64| [Num(x), Num(y)];
+    if r <= 0.0 {
+        return Bezier {
+            c: true,
+            v: vec![pt(x0, y0), pt(x1, y0), pt(x1, y1), pt(x0, y1)],
+            i: vec![pt(0.0, 0.0); 4],
+            o: vec![pt(0.0, 0.0); 4],
+        };
+    }
+    // 0.5523 — длина касательных, при которой кубическая кривая ближе всего к четверти окружности.
+    let k = 0.552_284_75 * r;
+    let z = pt(0.0, 0.0);
+    Bezier {
+        c: true,
+        v: vec![
+            pt(x0 + r, y0),
+            pt(x1 - r, y0),
+            pt(x1, y0 + r),
+            pt(x1, y1 - r),
+            pt(x1 - r, y1),
+            pt(x0 + r, y1),
+            pt(x0, y1 - r),
+            pt(x0, y0 + r),
+        ],
+        i: vec![pt(-k, 0.0), z, pt(0.0, -k), z, pt(k, 0.0), z, pt(0.0, k), z],
+        o: vec![z, pt(k, 0.0), z, pt(0.0, k), z, pt(-k, 0.0), z, pt(0.0, -k)],
+    }
+}
+
+/// Слои фона, сверху вниз: рамка, заливка.
+fn background_layers(plan: &BackgroundPlan, canvas: u32, frames: u32) -> Vec<lottie::Layer> {
+    let c = canvas as f64;
+    let mut out = Vec::new();
+    if let Some((rgb, w)) = plan.border {
+        // Кольцо: внешний край — край фона, внутренний — отступ w внутрь
+        // с радиусом r − w; правило evenodd вырезает середину.
+        let outer = rounded_rect(0.0, 0.0, c, c, plan.radius);
+        let inner = rounded_rect(w, w, c - w, c - w, plan.radius - w);
+        out.push(fill_layer(
+            "background-border",
+            vec![outer, inner],
+            rgb,
+            lottie::FILL_RULE_EVENODD,
+            frames,
+        ));
+    }
+    if let Some(rgb) = plan.fill {
+        let rect = rounded_rect(0.0, 0.0, c, c, plan.radius);
+        out.push(fill_layer(
+            "background",
+            vec![rect],
+            rgb,
+            lottie::FILL_RULE_NONZERO,
+            frames,
+        ));
+    }
+    out
 }
 
 /// Слой из одной группы: кривые, залитые сплошным цветом.
@@ -392,6 +473,7 @@ fn fill_layer(
     name: &str,
     beziers: Vec<lottie::Bezier>,
     rgb: [u8; 3],
+    rule: u8,
     frames: u32,
 ) -> lottie::Layer {
     use lottie::{GroupTransform, Num, Shape, Static};
@@ -403,7 +485,7 @@ fn fill_layer(
     it.push(Shape::Fill {
         c: Static::new([ch(rgb[0]), ch(rgb[1]), ch(rgb[2]), Num(1.0)]),
         o: Static::new(Num(100.0)),
-        r: lottie::FILL_RULE_NONZERO,
+        r: rule,
     });
     it.push(Shape::Transform(GroupTransform::default()));
     let group = Shape::Group {

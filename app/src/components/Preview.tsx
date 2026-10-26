@@ -171,14 +171,16 @@ function Chat({
 export function SegButton({
   active,
   onClick,
+  title,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  title?: string;
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" role="radio" aria-checked={active} className="segmented__item" onClick={onClick}>
+    <button type="button" role="radio" aria-checked={active} className="segmented__item" title={title} onClick={onClick}>
       {children}
     </button>
   );

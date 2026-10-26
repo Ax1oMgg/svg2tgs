@@ -78,7 +78,7 @@ pub enum Optimization {
     Manual(u8),
 }
 
-/// Обводка вокруг всего рисунка, как у вырезанных стикеров.
+/// Обводка вокруг всего рисунка (как у вырезанных стикеров) или рамка фона.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Outline {
     /// Толщина в пикселях канваса.
@@ -105,6 +105,10 @@ pub struct Options {
     pub padding: f32,
     pub fit: Fit,
     pub background: Background,
+    /// Скругление углов фона, пиксели канваса (0 — прямые углы).
+    pub background_radius: f32,
+    /// Рамка фона внутри канваса; `None` — без рамки.
+    pub background_border: Option<Outline>,
     /// Обводка вокруг рисунка; `None` — без обводки.
     pub outline: Option<Outline>,
     pub optimization: Optimization,
@@ -121,6 +125,8 @@ impl Default for Options {
             padding: 0.0,
             fit: Fit::default(),
             background: Background::default(),
+            background_radius: 0.0,
+            background_border: None,
             outline: None,
             optimization: Optimization::default(),
             canvas_size: None,

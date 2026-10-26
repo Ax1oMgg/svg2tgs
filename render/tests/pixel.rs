@@ -161,3 +161,47 @@ fn outline_surrounds_the_silhouette() {
     let d = compare(&expected, &plain);
     assert!(d.bad_ratio > MAX_BAD, "{d:?}");
 }
+
+/// Фон со скруглением и рамкой. Эталон — SVG: квадрат с `rx` и рамка
+/// обводкой SVG толщиной W по квадрату, утопленному на W/2 (её внешний
+/// край совпадает с краем фона, внутренний радиус — r − W).
+#[test]
+fn rounded_background_with_border() {
+    use svg2tgs_core::{Background, Outline};
+    let art = r##"<circle cx="50" cy="50" r="30" fill="#2f81f7"/>"##;
+    let svg =
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{art}</svg>"#);
+    let (r, w) = (64.0_f32, 12.0_f32);
+    let options = Options {
+        background: Background::Solid("#fbe0e4".into()),
+        background_radius: r,
+        background_border: Some(Outline {
+            width: w,
+            color: "#20c070".into(),
+        }),
+        ..Options::default()
+    };
+    let reference = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <rect width="512" height="512" rx="{r}" fill="#fbe0e4"/>
+        <rect x="{h}" y="{h}" width="{iw}" height="{iw}" rx="{ir}" fill="none" stroke="#20c070" stroke-width="{w}"/>
+        <g transform="scale(5.12)">{art}</g></svg>"##,
+        h = w / 2.0,
+        iw = 512.0 - w,
+        ir = r - w / 2.0,
+    );
+    let expected = render_svg(reference.as_bytes(), SIZE, &Options::default()).unwrap();
+    let conv = convert(svg.as_bytes(), &options).unwrap();
+    let result = render_tgs(&conv.tgs, SIZE, 0).unwrap();
+    // Превью исходника в приложении рисует фон тем же способом.
+    let preview = render_svg(svg.as_bytes(), SIZE, &options).unwrap();
+    for (name, img) in [("tgs", &result), ("preview", &preview)] {
+        let d = compare(&expected, img);
+        if d.mean > MAX_MEAN || d.bad_ratio > MAX_BAD {
+            std::fs::create_dir_all(diff_dir()).unwrap();
+            let out = diff_dir().join(format!("background-{name}.png"));
+            std::fs::write(&out, diff_sheet(&expected, img).to_png()).unwrap();
+            panic!("фон ({name}) не совпал: {d:?}, см. {}", out.display());
+        }
+    }
+}

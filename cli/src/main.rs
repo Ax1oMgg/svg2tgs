@@ -62,6 +62,14 @@ struct Cli {
     #[arg(long)]
     bg: Option<String>,
 
+    /// Скругление углов фона, пиксели канваса 512.
+    #[arg(long, default_value_t = 0.0)]
+    bg_radius: f32,
+
+    /// Рамка фона внутри канваса: толщина и цвет, например `12:#000000`.
+    #[arg(long, value_parser = parse_outline)]
+    bg_border: Option<Outline>,
+
     /// Обводка вокруг рисунка: толщина в пикселях канваса и цвет,
     /// например `12` (белая) или `12:#000000`.
     #[arg(long, value_parser = parse_outline)]
@@ -316,6 +324,8 @@ fn main() -> ExitCode {
             .bg
             .clone()
             .map_or(Background::Transparent, Background::Solid),
+        background_radius: cli.bg_radius.max(0.0),
+        background_border: cli.bg_border.clone(),
         outline: cli.outline.clone(),
         optimization: cli.optimize,
         fps: cli.fps,

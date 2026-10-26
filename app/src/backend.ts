@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.1", coreVersion: "0.1.1", runtime: "browser" };
+    return { version: "0.1.2", coreVersion: "0.1.2", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };

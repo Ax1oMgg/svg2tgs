@@ -154,18 +154,75 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
         return Err(RenderError::BadSize);
     }
     let tree = svg2tgs_core::parse_svg(svg)?;
-    let background = svg2tgs_core::parse_background(&options.background)?;
+    let background = svg2tgs_core::background_plan(options)?;
     let canvas = options.effective_canvas_size() as f32;
     let fit = svg2tgs_core::fit_transform(tree.size(), canvas, options);
     let k = size as f32 / canvas;
     let transform = tiny_skia::Transform::from_scale(k, k).pre_concat(fit);
 
     let mut pm = tiny_skia::Pixmap::new(size, size).expect("размер > 0");
-    if let Some([r, g, b]) = background {
-        pm.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
-    }
+    draw_background(&mut pm, &background, k);
     resvg::render(&tree, transform, &mut pm.as_mut());
     Ok(Image::from_pixmap(&pm))
+}
+
+/// Фон как в TGS: заливка и рамка — скруглённые квадраты на весь канвас
+/// (`k` — масштаб от канваса к картинке).
+fn draw_background(pm: &mut tiny_skia::Pixmap, plan: &svg2tgs_core::BackgroundPlan, k: f32) {
+    let side = pm.width() as f32;
+    let r = plan.radius as f32 * k;
+    let mut paint = tiny_skia::Paint {
+        anti_alias: true,
+        ..Default::default()
+    };
+    if let Some([red, g, b]) = plan.fill {
+        paint.set_color_rgba8(red, g, b, 255);
+        if let Some(path) = rounded_rect(0.0, 0.0, side, side, r) {
+            pm.fill_path(
+                &path,
+                &paint,
+                tiny_skia::FillRule::Winding,
+                tiny_skia::Transform::identity(),
+                None,
+            );
+        }
+    }
+    if let Some(([red, g, b], w)) = plan.border {
+        let w = w as f32 * k;
+        paint.set_color_rgba8(red, g, b, 255);
+        let mut pb = tiny_skia::PathBuilder::new();
+        for (inset, radius) in [(0.0, r), (w, r - w)] {
+            if let Some(p) = rounded_rect(inset, inset, side - inset, side - inset, radius) {
+                pb.push_path(&p);
+            }
+        }
+        if let Some(ring) = pb.finish() {
+            pm.fill_path(
+                &ring,
+                &paint,
+                tiny_skia::FillRule::EvenOdd,
+                tiny_skia::Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+fn rounded_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Option<tiny_skia::Path> {
+    let r = r.max(0.0).min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
+    let k = 0.552_284_8 * r;
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x0 + r, y0);
+    pb.line_to(x1 - r, y0);
+    pb.cubic_to(x1 - r + k, y0, x1, y0 + r - k, x1, y0 + r);
+    pb.line_to(x1, y1 - r);
+    pb.cubic_to(x1, y1 - r + k, x1 - r + k, y1, x1 - r, y1);
+    pb.line_to(x0 + r, y1);
+    pb.cubic_to(x0 + r - k, y1, x0, y1 - r + k, x0, y1 - r);
+    pb.line_to(x0, y0 + r);
+    pb.cubic_to(x0, y0 + r - k, x0 + r - k, y0, x0 + r, y0);
+    pb.close();
+    pb.finish()
 }
 
 #[cfg(test)]
