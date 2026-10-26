@@ -6,7 +6,8 @@
 Проект «Чайная Аксиома». Автор — Ax1oM.
 
 > Статус: **этап 7 — установщики** для Windows, macOS и Linux собираются
-> на GitHub при выпуске версии. Функционал — в [`docs/SPEC.md`](docs/SPEC.md).
+> на GitHub при выпуске версии. Функционал — в [`docs/SPEC.md`](docs/SPEC.md),
+> план развития — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Установка
 
