@@ -24,6 +24,10 @@ export interface Options {
   padding: number;
   fit: Fit;
   background: Background;
+  /** Скругление углов фона, px канваса 512. */
+  background_radius?: number;
+  /** Рамка фона внутри канваса; `null` — без рамки. */
+  background_border?: Outline | null;
   /** `null` — без обводки. */
   outline?: Outline | null;
   optimization: Optimization;
@@ -87,9 +91,13 @@ export const DEFAULT_OPTIONS: Options = {
   padding: 0,
   fit: "contain",
   background: { kind: "transparent" },
+  background_radius: 0,
+  background_border: null,
   outline: null,
   optimization: { mode: "auto" },
 };
 
 export const DEFAULT_OUTLINE: Outline = { width: 12, color: "#ffffff" };
 export const MAX_OUTLINE = 64;
+export const MAX_RADIUS = 256;
+export const DEFAULT_BORDER: Outline = { width: 12, color: "#3157d5" };

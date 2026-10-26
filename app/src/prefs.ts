@@ -44,9 +44,9 @@ export function defaultPrefs(): Prefs {
     recursive: true,
     export: {
       dir: null,
-      suffix: { on: true, value: "_tg" },
+      suffix: { on: false, value: "" },
       prefix: { on: false, value: "" },
-      subfolder: { on: true, value: "tgs" },
+      subfolder: { on: false, value: "" },
     },
     conflict: "number",
     previewMode: "chat",
