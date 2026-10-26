@@ -7,10 +7,14 @@
 ## Устройство
 
 - **Экраны** (верхние ряды): список и превью «как в чате», пустое окно,
-  «Крупно», эмодзи в тёмном чате с замечанием, окно сохранения, тёмная тема.
-- **Компоненты** (нижний ряд): TopBar, FileList, Preview, SettingsPanel,
-  EmptyState, SaveDialog. Экраны собраны из них: правка компонента меняет
-  все экраны.
+  «Крупно», эмодзи в тёмном чате с замечанием, конвертация (прогресс),
+  окно настроек, тёмная тема.
+- **Компоненты** (нижний ряд): TopBar, FileList, Preview, SettingsPanel
+  (панель экспорта), EmptyState, SettingsDialog. Экраны собраны из них:
+  правка компонента меняет все экраны.
+- **Buttons** — справочная доска кнопок: тип (Primary, Default, Text,
+  Link) × состояние (Default, Hover, Focused, Active, Disabled) × тема
+  (Light, Dark). Классы `.btn--*` в макете и в `App.css` одинаковые.
 - Раскладка — flex и grid, как в `app/src/App.css`, поэтому отступы и
   выравнивание переносятся в код один в один.
 - Цвета, размеры и шрифт — CSS-переменные из копии
@@ -27,9 +31,10 @@
 | TopBar | `app/src/components/TopBar.tsx` |
 | FileList | `app/src/components/FileList.tsx` |
 | Preview | `app/src/components/Preview.tsx` |
-| SettingsPanel | `app/src/components/SettingsPanel.tsx` |
+| SettingsPanel (панель экспорта) | `app/src/components/ExportPanel.tsx` |
 | EmptyState | `app/src/components/EmptyState.tsx` |
-| SaveDialog | `app/src/components/SaveDialog.tsx` |
+| SettingsDialog | `app/src/components/SettingsDialog.tsx` |
+| Buttons | классы `.btn--*` в `app/src/App.css` |
 | Экраны (каркас, затемнение под диалогом) | `app/src/App.tsx`, `app/src/App.css` |
 
 ## Как вносить правки

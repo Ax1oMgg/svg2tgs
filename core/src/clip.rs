@@ -129,6 +129,40 @@ pub fn union(a: &Contours, b: &Contours) -> Contours {
     shapes_to_contours(a.overlay(b, OverlayRule::Union, FillRule::NonZero))
 }
 
+/// Склеивает контуры в одну область по правилу nonzero.
+pub fn simplify(c: &Contours) -> Contours {
+    if c.is_empty() {
+        return Vec::new();
+    }
+    shapes_to_contours(c.simplify_shape(FillRule::NonZero))
+}
+
+/// Обводка вокруг области шириной `width`: область, расширенная наружу
+/// со скруглёнными углами. Дырки заполняются — как у вырезанного стикера.
+pub fn outline(region: &Contours, width: f64) -> Contours {
+    use i_overlay::mesh::float::outline::offset::OutlineOffset;
+    use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
+    if region.is_empty() || width <= 0.0 {
+        return Vec::new();
+    }
+    // Дуга скругления — отрезками длиной L, отклонение L²/8R ≤ допуска.
+    let step = (8.0 * FLATTEN_TOLERANCE / width).sqrt().clamp(0.05, 0.5);
+    let style = OutlineStyle::new(width).line_join(LineJoin::Round(step));
+    let shapes = region
+        .simplify_shape(FillRule::NonZero)
+        .into_iter()
+        .filter_map(|shape| shape.into_iter().next())
+        .collect::<Contours>();
+    // Первый контур каждой части — внешний; дырки (и те, что остались
+    // после расширения) выбрасываются, затем части склеиваются.
+    let outer: Contours = shapes
+        .outline(&style)
+        .into_iter()
+        .filter_map(|shape| shape.into_iter().next())
+        .collect();
+    simplify(&outer)
+}
+
 /// Видимая область: прямоугольник (канвас) или произвольная форма.
 /// Для прямоугольника положение фигуры считается простым сравнением.
 #[derive(Debug, Clone)]

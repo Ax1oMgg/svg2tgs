@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::telegram;
 
+/// Наибольшая толщина обводки, пиксели канваса.
+pub const MAX_OUTLINE: f32 = 64.0;
+
 /// Для чего готовим файл. Пресет задаёт канвас, fps и длительность.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +78,24 @@ pub enum Optimization {
     Manual(u8),
 }
 
+/// Обводка вокруг всего рисунка, как у вырезанных стикеров.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Outline {
+    /// Толщина в пикселях канваса.
+    pub width: f32,
+    /// Цвет в виде `#rrggbb`.
+    pub color: String,
+}
+
+impl Default for Outline {
+    fn default() -> Self {
+        Self {
+            width: 12.0,
+            color: "#ffffff".into(),
+        }
+    }
+}
+
 /// Полный набор параметров одной конвертации.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -84,6 +105,8 @@ pub struct Options {
     pub padding: f32,
     pub fit: Fit,
     pub background: Background,
+    /// Обводка вокруг рисунка; `None` — без обводки.
+    pub outline: Option<Outline>,
     pub optimization: Optimization,
     /// Переопределения пресета (расширенные настройки).
     pub canvas_size: Option<u32>,
@@ -98,6 +121,7 @@ impl Default for Options {
             padding: 0.0,
             fit: Fit::default(),
             background: Background::default(),
+            outline: None,
             optimization: Optimization::default(),
             canvas_size: None,
             fps: None,
@@ -119,6 +143,13 @@ impl Options {
     pub fn effective_duration_secs(&self) -> f32 {
         self.duration_secs
             .unwrap_or_else(|| self.preset.duration_secs())
+    }
+
+    /// Толщина обводки, если она включена и видна.
+    pub fn outline_width(&self) -> f32 {
+        self.outline
+            .as_ref()
+            .map_or(0.0, |o| o.width.clamp(0.0, MAX_OUTLINE))
     }
 
     /// Число кадров анимации (не меньше 1).

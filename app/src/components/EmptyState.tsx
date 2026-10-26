@@ -30,7 +30,7 @@ export function EmptyState({ lang, recursive, onRecursive, onAddFiles, onAddFold
         <button type="button" className="btn btn--primary" onClick={onAddFiles}>
           {t.addFiles}
         </button>
-        <button type="button" className="btn btn--outline" onClick={onAddFolder}>
+        <button type="button" className="btn btn--default" onClick={onAddFolder}>
           {t.addFolder}
         </button>
       </div>

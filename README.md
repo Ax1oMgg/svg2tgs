@@ -43,7 +43,7 @@ svg2tgs папка_с_svg -o папка_для_tgs
 ```
 Из исходников: `cargo run --release -p svg2tgs-cli -- …`.
 Параметры: `--preset sticker|emoji`, `-r` — вложенные папки, `--on-conflict`,
-`--padding`, `--fit`, `--bg`, `--optimize`, `--fps`, `--duration`,
+`--padding`, `--fit`, `--bg`, `--outline`, `--optimize`, `--fps`, `--duration`,
 `--json` — отчёт для скриптов (подробно — `--help`).
 
 ## Структура

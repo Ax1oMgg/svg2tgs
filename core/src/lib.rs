@@ -21,7 +21,7 @@ use std::sync::{Arc, OnceLock};
 
 use usvg::Transform;
 
-pub use options::{Background, Fit, Optimization, Options, Preset};
+pub use options::{Background, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE};
 pub use report::{Conversion, Severity, Warning, WarningCode};
 /// usvg той же версии, что использует ядро, — для рендера эталона (resvg).
 pub use usvg;
@@ -164,6 +164,10 @@ const AUTO_LADDER: [(u8, f64); 7] = [
 /// Конвертирует SVG (содержимое файла) в TGS.
 pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     let background = parse_background(&options.background)?;
+    let outline = match &options.outline {
+        Some(o) if options.outline_width() > 0.0 => Some(parse_color(&o.color, "обводки")?),
+        _ => None,
+    };
     let (tree, text_lost) = parse_with(svg, fontdb())?;
     let limit = options.preset.max_bytes();
 
@@ -175,7 +179,7 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
 
     let mut result = None;
     for (step, &(decimals, tolerance)) in ladder.iter().enumerate() {
-        let built = build(&tree, options, background, decimals, tolerance)?;
+        let built = build(&tree, options, background, outline, decimals, tolerance)?;
         let fits = built.tgs.len() <= limit && built.max_points <= telegram::MAX_POINTS_PER_SHAPE;
         result = Some((step, tolerance, built));
         if fits {
@@ -254,13 +258,18 @@ fn build(
     tree: &usvg::Tree,
     options: &Options,
     background: Option<[u8; 3]>,
+    outline: Option<[u8; 3]>,
     decimals: u8,
     tolerance: f64,
 ) -> Result<Built, Error> {
     let canvas = options.effective_canvas_size();
     let fit = fit_transform(tree.size(), canvas as f32, options);
 
-    let mut conv = convert::Converter::new(lottie::Rounder::with_tolerance(decimals, tolerance));
+    let round = lottie::Rounder::with_tolerance(decimals, tolerance);
+    let mut conv = convert::Converter::new(round);
+    if outline.is_some() {
+        conv.silhouette = Some(Vec::new());
+    }
     conv.run(tree.root(), fit, canvas as f64);
     if conv.is_empty() {
         return Err(Error::Empty);
@@ -277,6 +286,19 @@ fn build(
             .ks
             .set_opacity(lottie::Rounder::new(3).num(draft.opacity * 100.0));
         layers.push(layer);
+    }
+    // Обводка — под рисунком, над фоном; за канвас не выходит.
+    if let (Some(color), Some(silhouette)) = (outline, conv.silhouette.take()) {
+        let width = options.outline_width() as f64;
+        let c = canvas as f64;
+        let area = clip::intersect(
+            &clip::outline(&silhouette, width),
+            &clip::rect([0.0, 0.0, c, c]),
+        );
+        if !area.is_empty() {
+            let beziers = clip::to_beziers(&area, &round);
+            layers.push(fill_layer("outline", beziers, color, frames));
+        }
     }
     if let Some(color) = background {
         layers.push(background_layer(color, canvas, frames));
@@ -321,7 +343,8 @@ fn build(
 pub fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transform {
     let (w, h) = (size.width(), size.height());
     let padding = options.padding.clamp(0.0, 0.45);
-    let area = canvas * (1.0 - 2.0 * padding);
+    // Обводка рисуется вокруг рисунка, поэтому место под неё вычитается.
+    let area = (canvas * (1.0 - 2.0 * padding) - 2.0 * options.outline_width()).max(1.0);
     let scale = match options.fit {
         Fit::Contain => (area / w).min(area / h),
         Fit::Cover => (area / w).max(area / h),
@@ -335,20 +358,23 @@ pub fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transf
 pub fn parse_background(bg: &Background) -> Result<Option<[u8; 3]>, Error> {
     match bg {
         Background::Transparent => Ok(None),
-        Background::Solid(s) => {
-            let hex = s.trim().trim_start_matches('#');
-            let bad = || Error::InvalidOption(format!("цвет фона «{s}»"));
-            if hex.len() != 6 || !hex.is_ascii() {
-                return Err(bad());
-            }
-            let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| bad());
-            Ok(Some([ch(0)?, ch(2)?, ch(4)?]))
-        }
+        Background::Solid(s) => parse_color(s, "фона").map(Some),
     }
 }
 
+/// Цвет `#rrggbb`; `what` — чей цвет, для сообщения об ошибке.
+fn parse_color(s: &str, what: &str) -> Result<[u8; 3], Error> {
+    let hex = s.trim().trim_start_matches('#');
+    let bad = || Error::InvalidOption(format!("цвет {what} «{s}»"));
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Err(bad());
+    }
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| bad());
+    Ok([ch(0)?, ch(2)?, ch(4)?])
+}
+
 fn background_layer(rgb: [u8; 3], canvas: u32, frames: u32) -> lottie::Layer {
-    use lottie::{Bezier, GroupTransform, Num, Shape, Static};
+    use lottie::{Bezier, Num};
     let c = canvas as f64;
     let rect = Bezier {
         c: true,
@@ -358,20 +384,31 @@ fn background_layer(rgb: [u8; 3], canvas: u32, frames: u32) -> lottie::Layer {
         i: vec![[Num(0.0); 2]; 4],
         o: vec![[Num(0.0); 2]; 4],
     };
+    fill_layer("background", vec![rect], rgb, frames)
+}
+
+/// Слой из одной группы: кривые, залитые сплошным цветом.
+fn fill_layer(
+    name: &str,
+    beziers: Vec<lottie::Bezier>,
+    rgb: [u8; 3],
+    frames: u32,
+) -> lottie::Layer {
+    use lottie::{GroupTransform, Num, Shape, Static};
     let ch = |v: u8| lottie::Rounder::new(3).num(v as f64 / 255.0);
+    let mut it: Vec<Shape> = beziers
+        .into_iter()
+        .map(|b| Shape::Path { ks: Static::new(b) })
+        .collect();
+    it.push(Shape::Fill {
+        c: Static::new([ch(rgb[0]), ch(rgb[1]), ch(rgb[2]), Num(1.0)]),
+        o: Static::new(Num(100.0)),
+        r: lottie::FILL_RULE_NONZERO,
+    });
+    it.push(Shape::Transform(GroupTransform::default()));
     let group = Shape::Group {
-        nm: Some("background".into()),
-        it: vec![
-            Shape::Path {
-                ks: Static::new(rect),
-            },
-            Shape::Fill {
-                c: Static::new([ch(rgb[0]), ch(rgb[1]), ch(rgb[2]), Num(1.0)]),
-                o: Static::new(Num(100.0)),
-                r: lottie::FILL_RULE_NONZERO,
-            },
-            Shape::Transform(GroupTransform::default()),
-        ],
+        nm: Some(name.into()),
+        it,
     };
     lottie::Layer::new(0, frames, vec![group])
 }

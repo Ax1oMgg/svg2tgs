@@ -10,6 +10,13 @@ export type Optimization =
   | { mode: "lossless" }
   | { mode: "manual"; precision: number };
 
+/** Обводка вокруг рисунка — `svg2tgs_core::Outline`. */
+export interface Outline {
+  /** Толщина, пиксели канваса 512. */
+  width: number;
+  color: string;
+}
+
 /** Параметры конвертации — `svg2tgs_core::Options`. */
 export interface Options {
   preset: Preset;
@@ -17,6 +24,8 @@ export interface Options {
   padding: number;
   fit: Fit;
   background: Background;
+  /** `null` — без обводки. */
+  outline?: Outline | null;
   optimization: Optimization;
   fps?: number | null;
   duration_secs?: number | null;
@@ -51,11 +60,18 @@ export interface FileItem {
   outcome?: Outcome;
   /** Миниатюра результата (data-URL). */
   thumb?: string;
+  /** Свои настройки файла; без них действуют общие. */
+  options?: Options;
 }
 
+/** Что сохранить (`files::SaveRequest`): папка — `dir`, иначе папка `source`. */
 export interface SaveRequest {
   id: string;
+  /** Имя без расширения. */
   name: string;
+  dir?: string | null;
+  source?: string | null;
+  subfolder?: string | null;
 }
 
 export type Conflict = "overwrite" | "skip" | "number";
@@ -71,5 +87,9 @@ export const DEFAULT_OPTIONS: Options = {
   padding: 0,
   fit: "contain",
   background: { kind: "transparent" },
+  outline: null,
   optimization: { mode: "auto" },
 };
+
+export const DEFAULT_OUTLINE: Outline = { width: 12, color: "#ffffff" };
+export const MAX_OUTLINE = 64;

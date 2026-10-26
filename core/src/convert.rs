@@ -52,6 +52,9 @@ pub struct Converter {
     pub warnings: Vec<Warning>,
     /// Самая тонкая видимая обводка, пиксели канваса.
     pub thinnest_stroke: Option<f64>,
+    /// Силуэт рисунка (все видимые заливки и обводки) — для обводки
+    /// вокруг рисунка. Собирается, только если перед обходом задан `Some`.
+    pub silhouette: Option<Contours>,
     next_layer_id: usize,
 }
 
@@ -63,6 +66,7 @@ impl Converter {
             layers: Vec::new(),
             warnings: Vec::new(),
             thinnest_stroke: None,
+            silhouette: None,
             next_layer_id: 0,
         }
     }
@@ -232,7 +236,11 @@ impl Converter {
             let w = s.width().get() as f64 * mean_scale(&m);
             self.thinnest_stroke = Some(self.thinnest_stroke.map_or(w, |t| t.min(w)));
         }
-        match self.relation(&base, p, ctx) {
+        let relation = self.relation(&base, p, ctx);
+        if relation != Relation::Outside && self.silhouette.is_some() {
+            self.add_to_silhouette(p, &base, ctx, relation);
+        }
+        match relation {
             Relation::Outside => return,
             Relation::Crossing => return self.draw_clipped(p, ctx),
             Relation::Inside => {}
@@ -318,6 +326,32 @@ impl Converter {
         };
         for g in ordered {
             self.push_item(g, ctx);
+        }
+    }
+
+    /// Добавляет видимую часть элемента к силуэту. Контуры складываются
+    /// как есть: области от i_overlay обходятся согласованно (внешние в одну
+    /// сторону, дырки в другую), поэтому по правилу nonzero их простое
+    /// соединение — это объединение. Склейка — один раз, в `build`.
+    fn add_to_silhouette(&mut self, p: &Path, base: &[Bezier], ctx: &Ctx, relation: Relation) {
+        let mut parts: Contours = Vec::new();
+        if let Some(f) = p.fill().filter(|f| f.opacity().get() > 0.0) {
+            let rule = match f.rule() {
+                FillRule::NonZero => FILL_RULE_NONZERO,
+                FillRule::EvenOdd => FILL_RULE_EVENODD,
+            };
+            parts.extend(clip::region(base, rule));
+        }
+        if let Some(s) = p.stroke().filter(|s| s.opacity().get() > 0.0) {
+            if let Some(outline) = self.stroke_outline(p, s, ctx) {
+                parts.extend(clip::region(&outline, FILL_RULE_NONZERO));
+            }
+        }
+        if relation == Relation::Crossing {
+            parts = clip::intersect(&parts, &ctx.clip.contours);
+        }
+        if let Some(all) = self.silhouette.as_mut() {
+            all.extend(parts);
         }
     }
 

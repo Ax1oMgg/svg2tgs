@@ -3,50 +3,40 @@ import { strings } from "../i18n";
 
 interface Props {
   lang: Lang;
-  readyCount: number;
-  onAddFiles: () => void;
-  onAddFolder: () => void;
-  onSave: () => void;
+  onSettings: () => void;
 }
 
-/** Верхняя панель: добавление файлов и главное действие — сохранить. */
-export function TopBar({ lang, readyCount, onAddFiles, onAddFolder, onSave }: Props) {
+/**
+ * Верхняя панель. Название программы — в заголовке окна
+ * («svg2tgs by Чайная Аксиома»), здесь только кнопка настроек.
+ */
+export function TopBar({ lang, onSettings }: Props) {
   const t = strings[lang];
   return (
     <header className="topbar">
-      <div className="topbar__brand">
-        <Logo />
-        <span className="topbar__name">svg2tgs</span>
-      </div>
-      <div className="topbar__actions">
-        <button type="button" className="btn btn--quiet" onClick={onAddFiles}>
-          {t.addFiles}
-        </button>
-        <button type="button" className="btn btn--quiet" onClick={onAddFolder}>
-          {t.addFolder}
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={onSave}
-          disabled={readyCount === 0}
-        >
-          {readyCount > 0 ? t.saveAll(readyCount) : t.save}
-        </button>
-      </div>
+      <button type="button" className="btn btn--text btn--icon" aria-label={t.settings} title={t.settings} onClick={onSettings}>
+        <GearIcon />
+      </button>
     </header>
   );
 }
 
-function Logo() {
+/** Значок «шестерёнка» — Lucide `settings` (ISC, см. THIRD_PARTY_NOTICES.md). */
+function GearIcon() {
   return (
-    <svg className="topbar__logo" viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="2" y="2" width="28" height="28" rx="8" fill="var(--color-accent)" />
-      <path
-        d="M10 9h9l4 4v9a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 9 22V10.5A1.5 1.5 0 0 1 10.5 9z"
-        fill="var(--color-on-accent)"
-      />
-      <path d="M19 9v3a1 1 0 0 0 1 1h3z" fill="var(--color-accent-soft)" />
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }

@@ -11,10 +11,10 @@
   "app": {
     "windows": [
       {
-        "title": "svg2tgs",
-        "width": 1100,
+        "title": "svg2tgs by Чайная Аксиома",
+        "width": 1200,
         "height": 720,
-        "minWidth": 760,
+        "minWidth": 900,
         "minHeight": 520,
         "dragDropEnabled": true
       }

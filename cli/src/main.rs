@@ -13,7 +13,9 @@ mod messages;
 
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
-use svg2tgs_core::{Background, Fit, Optimization, Options, Preset, Severity, Warning};
+use svg2tgs_core::{
+    Background, Fit, Optimization, Options, Outline, Preset, Severity, Warning, MAX_OUTLINE,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -59,6 +61,11 @@ struct Cli {
     /// Цвет фона, например #ffffff. По умолчанию прозрачный.
     #[arg(long)]
     bg: Option<String>,
+
+    /// Обводка вокруг рисунка: толщина в пикселях канваса и цвет,
+    /// например `12` (белая) или `12:#000000`.
+    #[arg(long, value_parser = parse_outline)]
+    outline: Option<Outline>,
 
     /// Оптимизация размера: auto — уложиться в лимит Telegram,
     /// lossless — без упрощения, число 0–6 — знаков после запятой.
@@ -110,6 +117,21 @@ fn parse_padding(s: &str) -> Result<f32, String> {
         return Err("отступ должен быть от 0 до 20 %".into());
     }
     Ok(v / 100.0)
+}
+
+fn parse_outline(s: &str) -> Result<Outline, String> {
+    let (width, color) = match s.split_once(':') {
+        Some((w, c)) => (w, c.to_string()),
+        None => (s, Outline::default().color),
+    };
+    let width: f32 = width
+        .trim_end_matches("px")
+        .parse()
+        .map_err(|_| "ожидается толщина, например 12 или 12:#ffffff".to_string())?;
+    if !(0.0..=MAX_OUTLINE).contains(&width) {
+        return Err(format!("толщина обводки должна быть от 0 до {MAX_OUTLINE}"));
+    }
+    Ok(Outline { width, color })
 }
 
 fn parse_optimize(s: &str) -> Result<Optimization, String> {
@@ -294,6 +316,7 @@ fn main() -> ExitCode {
             .bg
             .clone()
             .map_or(Background::Transparent, Background::Solid),
+        outline: cli.outline.clone(),
         optimization: cli.optimize,
         fps: cli.fps,
         duration_secs: cli.duration,

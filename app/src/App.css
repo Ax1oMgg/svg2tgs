@@ -29,21 +29,23 @@
 
 /* Кнопки и поля --------------------------------------------------------- */
 
+/* Кнопки: тип (primary, default, text, link) × состояние (обычное,
+   наведение, фокус, нажатие, неактивна) — как на доске Buttons в макете. */
 .btn {
   font: inherit;
   font-weight: var(--font-weight-medium);
+  line-height: var(--line-height);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   padding: 7px 14px;
   cursor: pointer;
+  white-space: nowrap;
+  outline: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-text);
   background: transparent;
-  white-space: nowrap;
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .btn--primary {
@@ -51,27 +53,54 @@
   color: var(--color-on-accent);
 }
 
-.btn--primary:not(:disabled):hover {
+.btn--primary:hover {
   background: var(--color-accent-hover);
 }
 
-.btn--outline {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface);
+.btn--primary:active {
+  background: var(--color-accent-active);
 }
 
-.btn--outline:hover,
-.btn--quiet:hover {
-  background: var(--color-surface-muted);
+.btn--default {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+}
+
+.btn--default:hover,
+.btn--text:hover,
+.btn--link:hover {
+  background: var(--color-hover);
+}
+
+.btn--default:active,
+.btn--text:active,
+.btn--link:active {
+  background: var(--color-pressed);
 }
 
 .btn--link {
-  padding: 2px 4px;
   color: var(--color-accent);
 }
 
-.btn--link:hover {
-  text-decoration: underline;
+.btn:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-focus);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btn--icon {
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+}
+
+.btn--wide {
+  justify-content: center;
 }
 
 :focus-visible {
@@ -93,24 +122,196 @@ input[type="text"] {
   min-width: 0;
 }
 
-input[type="range"] {
-  width: 100%;
-  accent-color: var(--color-accent);
+input:disabled,
+select:disabled {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  opacity: 0.6;
 }
 
+/* Флажки и переключатели: свои, со скруглением, в цветах темы. */
 input[type="checkbox"],
 input[type="radio"] {
-  accent-color: var(--color-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-content: center;
+  border: 1.5px solid var(--color-border-strong);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+input[type="checkbox"] {
+  border-radius: 5px;
+}
+
+input[type="radio"] {
+  border-radius: 50%;
+}
+
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+  border-color: var(--color-accent);
+}
+
+input[type="checkbox"]:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  margin-top: -2px;
+  border: solid var(--color-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type="radio"]:checked {
+  border-color: var(--color-accent);
+}
+
+input[type="radio"]:checked::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-focus);
+}
+
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Ползунок: тонкая дорожка, заполненная часть — акцент (--fill задаётся
+   в style), круглый бегунок с рамкой акцента. */
+input[type="range"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--color-accent) var(--fill, 0%), var(--color-border) var(--fill, 0%));
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-accent);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+
+input[type="range"]:focus-visible {
+  outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-focus);
+}
+
+input[type="range"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Числовое поле без стрелок и выбор цвета-плашка. */
+input.num {
+  width: 56px;
+  padding: 4px 8px;
+  font-size: var(--font-size-sm);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+input.num::-webkit-inner-spin-button,
+input.num::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 input[type="color"] {
-  width: 40px;
-  height: 32px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 32px;
+  height: 28px;
   padding: 2px;
+  flex: none;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
-  flex: none;
+  cursor: pointer;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
+}
+
+input[type="color"]::-moz-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+input[type="color"]:disabled {
+  opacity: 0.45;
+  background: var(--color-surface-muted);
+  cursor: default;
 }
 
 .row {
@@ -180,28 +381,6 @@ input[type="color"] {
   border-bottom: 1px solid var(--color-border);
 }
 
-.topbar__brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.topbar__logo {
-  width: 26px;
-  height: 26px;
-}
-
-.topbar__name {
-  font-weight: var(--font-weight-bold);
-  font-size: var(--font-size-lg);
-  letter-spacing: -0.01em;
-}
-
-.topbar__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 /* Пустой экран ---------------------------------------------------------- */
 
 .empty {
@@ -269,9 +448,34 @@ input[type="color"] {
 
 .files__head {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.files__actions {
+  display: flex;
   justify-content: space-between;
-  padding: var(--space-4) var(--space-4) var(--space-2);
+  align-self: stretch;
+}
+
+/* «Добавить» и кнопка-папка — одна составная кнопка. */
+.add-group {
+  display: flex;
+}
+
+.add-group > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.add-group > .btn--icon {
+  height: auto;
+  width: 38px;
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .files__count {
@@ -283,6 +487,52 @@ input[type="color"] {
 .files__filter {
   padding: 0 var(--space-4) var(--space-3);
   font-size: var(--font-size-sm);
+}
+
+.files__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px var(--space-4);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-accent);
+  transition: width 0.2s;
+}
+
+.files__percent {
+  min-width: 3.5ch;
+  text-align: right;
+}
+
+.count {
+  font-weight: var(--font-weight-bold);
+}
+
+.count--ok {
+  color: var(--color-success);
+}
+
+.count--warn {
+  color: var(--color-warning);
+}
+
+.count--error {
+  color: var(--color-danger);
 }
 
 .files__list {
@@ -342,10 +592,26 @@ input[type="color"] {
   min-width: 0;
 }
 
+/* Имя обрезается посередине: голова с многоточием, хвост виден всегда. */
 .file__name {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.file__name-head {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+}
+
+.file__name-tail {
+  flex: none;
+  white-space: pre;
+}
+
+.file__own {
+  color: var(--color-accent);
 }
 
 .file__meta {
@@ -411,6 +677,7 @@ input[type="color"] {
 }
 
 .status--pending {
+  box-sizing: border-box;
   border: 2px solid var(--color-border-strong);
   border-top-color: var(--color-accent);
   animation: spin 0.8s linear infinite;
@@ -431,6 +698,14 @@ input[type="color"] {
   gap: var(--space-3);
   flex-wrap: wrap;
   padding: var(--space-3) var(--space-4);
+}
+
+.stage__name {
+  padding: 0 var(--space-4) var(--space-2);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage__canvas {
@@ -629,9 +904,9 @@ input[type="color"] {
   color: var(--color-text-muted);
 }
 
-/* Настройки ------------------------------------------------------------- */
+/* Панель экспорта ------------------------------------------------------ */
 
-.settings {
+.export {
   padding: var(--space-4);
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);
@@ -639,6 +914,74 @@ input[type="color"] {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.export__go {
+  margin-top: -6px;
+}
+
+.export__dest {
+  margin-top: -8px;
+}
+
+.export__naming {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: -4px;
+}
+
+.export__scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.export__scope .hint {
+  margin: 0;
+}
+
+.export__scope .hint strong {
+  color: var(--color-text);
+  font-weight: var(--font-weight-regular);
+}
+
+/* Строка «флажок + подпись | поле»: подписи одной ширины. */
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.opt-row__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 112px;
+  flex: none;
+  cursor: pointer;
+}
+
+.opt-row input:not([type]),
+.opt-row input[type="text"] {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: var(--font-size-sm);
+}
+
+.opt-row__unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text);
+}
+
+.opt-row input[type="color"] {
+  margin-left: auto;
 }
 
 .field {
@@ -650,9 +993,14 @@ input[type="color"] {
   padding: 0;
 }
 
+.field--slider {
+  gap: var(--space-2);
+}
+
 .field__label {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
   padding: 0;
@@ -690,36 +1038,20 @@ input[type="color"] {
   margin-top: var(--space-3);
 }
 
-.about {
-  margin-top: auto;
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-}
-
-.about p {
-  margin: 0;
-}
-
-.about .btn--link {
-  padding: 0;
-}
-
-/* Диалог сохранения ----------------------------------------------------- */
+/* Диалог настроек ------------------------------------------------------ */
 
 .dialog {
-  width: min(520px, calc(100vw - 32px));
+  width: min(440px, calc(100vw - 32px));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  padding: 0;
   background: var(--color-surface);
   color: var(--color-text);
   box-shadow: var(--shadow-dialog);
+}
+
+.dialog__body {
+  padding: var(--space-6);
 }
 
 .dialog::backdrop {
@@ -730,9 +1062,24 @@ input[type="color"] {
   margin-top: var(--space-4);
 }
 
+.dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: -4px -8px var(--space-5) 0;
+}
+
 .dialog__title {
-  margin: 0 0 var(--space-5);
+  margin: 0;
   font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.dialog__close {
+  width: 32px;
+  height: 32px;
+  color: var(--color-text-muted);
 }
 
 .dialog__actions {
@@ -742,6 +1089,35 @@ input[type="color"] {
   margin-top: var(--space-6);
 }
 
+.about {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.about h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.about p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.about .btn--link {
+  margin-left: -14px;
+}
+
+/* Путь: длинный обрезается слева (rtl), dir="ltr" внутри сохраняет порядок. */
 .path {
   flex: 1;
   min-width: 0;
@@ -749,6 +1125,7 @@ input[type="color"] {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-muted);
+  font-size: var(--font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -756,7 +1133,7 @@ input[type="color"] {
   text-align: left;
 }
 
-.suffix {
+.path--placeholder {
   color: var(--color-text-muted);
 }
 
@@ -841,7 +1218,7 @@ input[type="color"] {
     grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .layout .settings {
+  .layout .export {
     grid-column: 1 / -1;
     border-left: 0;
     border-top: 1px solid var(--color-border);

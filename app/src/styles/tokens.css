@@ -18,6 +18,10 @@
   /* Акцент: глубокий кобальт */
   --color-accent: #3157d5;
   --color-accent-hover: #2847b8;
+  --color-accent-active: #213c9c;
+  /* Фон кнопок без заливки при наведении и нажатии */
+  --color-hover: #edf0f3;
+  --color-pressed: #e1e6eb;
   --color-accent-soft: #dce4fb;
   --color-on-accent: #ffffff;
   --color-focus: #3157d5;
@@ -75,7 +79,7 @@
   --radius-bubble: 16px;
 
   /* Размеры колонок */
-  --width-files: 290px;
+  --width-files: 358px;
   --width-settings: 280px;
   --height-topbar: 52px;
 
@@ -95,6 +99,9 @@
     --color-text-muted: #95a1b0;
     --color-accent: #6d8cf2;
     --color-accent-hover: #86a0f5;
+    --color-accent-active: #a3b7f8;
+    --color-hover: #222a35;
+    --color-pressed: #2b3542;
     --color-accent-soft: #1f2a4d;
     --color-on-accent: #0f141a;
     --color-focus: #86a0f5;
@@ -121,6 +128,9 @@
   --color-text-muted: #95a1b0;
   --color-accent: #6d8cf2;
   --color-accent-hover: #86a0f5;
+  --color-accent-active: #a3b7f8;
+  --color-hover: #222a35;
+  --color-pressed: #2b3542;
   --color-accent-soft: #1f2a4d;
   --color-on-accent: #0f141a;
   --color-focus: #86a0f5;

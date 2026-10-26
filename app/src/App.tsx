@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as backend from "./backend";
 import { EmptyState } from "./components/EmptyState";
+import { ExportPanel, type Scope } from "./components/ExportPanel";
 import { FileList } from "./components/FileList";
 import { Preview } from "./components/Preview";
-import { SaveDialog } from "./components/SaveDialog";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { TopBar } from "./components/TopBar";
 import { strings } from "./i18n";
-import { applyTemplate, loadPrefs, savePrefs, type Prefs } from "./prefs";
-import type { Saved } from "./types";
-import { useFiles } from "./useFiles";
+import { exportName, exportSubfolder, loadPrefs, savePrefs, type Prefs } from "./prefs";
+import type { Options, SaveRequest, Saved } from "./types";
+import { effectiveOptions, useFiles } from "./useFiles";
 import "./App.css";
 
 interface Toast {
@@ -17,14 +17,18 @@ interface Toast {
   folder: string | null;
 }
 
+/** Папка файла по его пути (оба вида разделителей). */
+const dirname = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
+
 export function App() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const patch = (p: Partial<Prefs>) => setPrefs((old) => ({ ...old, ...p }));
-  const { items, add, remove, clear } = useFiles(prefs.options);
+  const { items, add, remove, clear, setItemOptions } = useFiles(prefs.options);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
   const [version, setVersion] = useState("");
@@ -53,6 +57,8 @@ export function App() {
     },
     [add, prefs.recursive],
   );
+  const addFiles = () => void backend.pickPaths("files").then(addPaths);
+  const addFolder = () => void backend.pickPaths("folder").then(addPaths);
 
   // Файлы, переданные при запуске, и демонстрационные данные в браузере.
   useEffect(() => {
@@ -100,37 +106,76 @@ export function App() {
   const selected = items.find((it) => it.id === selectedId) ?? null;
   const ready = useMemo(() => items.filter((it) => it.status === "ok" || it.status === "warn"), [items]);
 
-  const openSave = async () => {
-    if (ready.length === 0) return;
-    if (!prefs.outputDir) {
-      const first = items.find((it) => it.source.kind === "path");
-      const dir = first && first.source.kind === "path" ? await backend.defaultOutputDir(first.source.path) : null;
-      if (dir) patch({ outputDir: dir });
-    }
-    setSaving(true);
+  // Панель правит общие настройки или свои настройки выбранного файла.
+  const scope: Scope = selected?.options ? "one" : "all";
+  const panelOptions = selected ? effectiveOptions(selected, prefs.options) : prefs.options;
+  const onPanelOptions = (o: Options) => {
+    if (scope === "one" && selected) setItemOptions(selected.id, o);
+    else patch({ options: o });
+  };
+  const onScope = (s: Scope) => {
+    if (!selected || s === scope) return;
+    setItemOptions(selected.id, s === "one" ? { ...prefs.options } : undefined);
   };
 
-  const doSave = async () => {
-    if (!prefs.outputDir) return;
-    const requests = ready.map((it) => ({ id: it.id, name: applyTemplate(prefs.nameTemplate, it.name) }));
-    const results: Saved[] = await backend.save(requests, prefs.outputDir, prefs.conflict);
-    setSaving(false);
-    const n = (s: Saved["status"]) => results.filter((r) => r.status === s).length;
-    const parts = [t.saved(n("saved"))];
-    if (n("skipped")) parts.push(t.skipped(n("skipped")));
-    if (n("failed")) parts.push(t.failed(n("failed")));
-    setToast({ text: parts.join(", "), folder: prefs.outputDir });
+  const runExport = async () => {
+    if (ready.length === 0) return;
+    setExporting(true);
+    try {
+      const ex = prefs.export;
+      // SVG из буфера лежит не в папке: если папка экспорта не задана,
+      // для таких файлов её нужно выбрать.
+      let pastedDir: string | null = null;
+      if (!ex.dir && ready.some((it) => it.source.kind === "text")) {
+        pastedDir = await backend.pickFolder(undefined, t.pastedNeedFolder);
+      }
+      const requests: SaveRequest[] = ready.map((it) => ({
+        id: it.id,
+        name: exportName(it.name, ex),
+        dir: ex.dir ?? (it.source.kind === "text" ? pastedDir : null),
+        source: it.source.kind === "path" ? it.source.path : null,
+        subfolder: exportSubfolder(ex),
+      }));
+      const results: Saved[] = await backend.save(requests, prefs.conflict);
+      const n = (s: Saved["status"]) => results.filter((r) => r.status === s).length;
+      const parts = [t.saved(n("saved"))];
+      if (n("skipped")) parts.push(t.skipped(n("skipped")));
+      if (n("failed")) parts.push(t.failed(n("failed")));
+      // «Открыть папку» — когда всё легло в одну папку.
+      const folders = new Set(results.filter((r) => r.path).map((r) => dirname(r.path!)));
+      setToast({ text: parts.join(", "), folder: folders.size === 1 ? [...folders][0] : null });
+    } finally {
+      setExporting(false);
+    }
   };
+
+  const exportPanel = (
+    <ExportPanel
+      // Новый файл или область — панель заново берёт из настроек
+      // запомненные цвет фона и параметры обводки.
+      key={scope === "one" ? selected?.id : "all"}
+      lang={prefs.lang}
+      options={panelOptions}
+      onOptions={onPanelOptions}
+      scope={scope}
+      onScope={onScope}
+      selectedName={selected?.name ?? null}
+      exportPrefs={prefs.export}
+      onExportPrefs={(e) => patch({ export: e })}
+      readyCount={ready.length}
+      exporting={exporting}
+      onExport={() => void runExport()}
+      onChooseDir={() =>
+        void backend
+          .pickFolder(prefs.export.dir ?? undefined)
+          .then((d) => d && patch({ export: { ...prefs.export, dir: d } }))
+      }
+    />
+  );
 
   return (
     <div className={`app${dragActive ? " app--drag" : ""}`}>
-      <TopBar
-        lang={prefs.lang}
-        readyCount={ready.length}
-        onAddFiles={() => void backend.pickPaths("files").then(addPaths)}
-        onAddFolder={() => void backend.pickPaths("folder").then(addPaths)}
-        onSave={() => void openSave()}
-      />
+      <TopBar lang={prefs.lang} onSettings={() => setSettingsOpen(true)} />
 
       {items.length === 0 ? (
         <div className="layout layout--empty">
@@ -138,18 +183,10 @@ export function App() {
             lang={prefs.lang}
             recursive={prefs.recursive}
             onRecursive={(recursive) => patch({ recursive })}
-            onAddFiles={() => void backend.pickPaths("files").then(addPaths)}
-            onAddFolder={() => void backend.pickPaths("folder").then(addPaths)}
+            onAddFiles={addFiles}
+            onAddFolder={addFolder}
           />
-          <SettingsPanel
-            lang={prefs.lang}
-            theme={prefs.theme}
-            options={prefs.options}
-            onOptions={(options) => patch({ options })}
-            onLang={(lang) => patch({ lang })}
-            onTheme={(theme) => patch({ theme })}
-            version={version}
-          />
+          {exportPanel}
         </div>
       ) : (
         <div className="layout">
@@ -162,25 +199,24 @@ export function App() {
             onSelect={setSelectedId}
             onRemove={(id) => remove([id])}
             onClear={clear}
+            onAddFiles={addFiles}
+            onAddFolder={addFolder}
           />
           <Preview
             lang={prefs.lang}
             item={selected}
-            preset={prefs.options.preset}
+            preset={panelOptions.preset}
             mode={prefs.previewMode}
             bg={prefs.previewBg}
-            onMode={(previewMode) => patch({ previewMode, previewBg: previewMode === "chat" && prefs.previewBg === "checker" ? "light" : prefs.previewBg })}
+            onMode={(previewMode) =>
+              patch({
+                previewMode,
+                previewBg: previewMode === "chat" && prefs.previewBg === "checker" ? "light" : prefs.previewBg,
+              })
+            }
             onBg={(previewBg) => patch({ previewBg })}
           />
-          <SettingsPanel
-            lang={prefs.lang}
-            theme={prefs.theme}
-            options={prefs.options}
-            onOptions={(options) => patch({ options })}
-            onLang={(lang) => patch({ lang })}
-            onTheme={(theme) => patch({ theme })}
-            version={version}
-          />
+          {exportPanel}
         </div>
       )}
 
@@ -190,20 +226,16 @@ export function App() {
         </div>
       )}
 
-      {saving && (
-        <SaveDialog
+      {settingsOpen && (
+        <SettingsDialog
           lang={prefs.lang}
-          count={ready.length}
-          dir={prefs.outputDir}
-          template={prefs.nameTemplate}
-          conflict={prefs.conflict}
-          onChooseDir={() =>
-            void backend.pickFolder(prefs.outputDir ?? undefined).then((d) => d && patch({ outputDir: d }))
-          }
-          onTemplate={(nameTemplate) => patch({ nameTemplate })}
-          onConflict={(conflict) => patch({ conflict })}
-          onCancel={() => setSaving(false)}
-          onSave={() => void doSave()}
+          theme={prefs.theme}
+          version={version}
+          onApply={(lang, theme) => {
+            patch({ lang, theme });
+            setSettingsOpen(false);
+          }}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
 
