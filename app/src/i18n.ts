@@ -81,6 +81,13 @@ const ru = {
   chooseFolderFirst: "Выберите папку",
   nothingToSave: "Нечего сохранять: нет готовых файлов",
   browserMode: "Браузерный режим: тестовые данные",
+  // О программе
+  about: "О программе",
+  version: (v: string) => `Версия ${v}`,
+  aboutProject: "Проект «Чайная Аксиома»",
+  aboutAuthor: "Автор — Ax1oM",
+  aboutLicense: "Лицензия MIT, работает без интернета",
+  projectPage: "Страница проекта",
 };
 
 type Dict = typeof ru;
@@ -157,6 +164,12 @@ const en: Dict = {
   chooseFolderFirst: "Choose a folder",
   nothingToSave: "Nothing to save: no converted files",
   browserMode: "Browser mode: sample data",
+  about: "About",
+  version: (v) => `Version ${v}`,
+  aboutProject: "A Chajnaya Axioma project",
+  aboutAuthor: "Author — Ax1oM",
+  aboutLicense: "MIT license, works offline",
+  projectPage: "Project page",
 };
 
 export const strings: Record<Lang, Dict> = { ru, en };

@@ -9,7 +9,7 @@ edition = "2021"
 rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/Ax1oMgg/svg2tgs"
-authors = ["Ax1oMgg"]
+authors = ["Ax1oM <chajnayaaxioma@gmail.com>"]
 
 [workspace.dependencies]
 svg2tgs-core = { path = "core" }

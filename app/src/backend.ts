@@ -68,6 +68,14 @@ export async function openFolder(path: string): Promise<void> {
   if (isTauri()) await invoke("open_folder", { path });
 }
 
+/** Страница проекта в браузере пользователя (сама программа в сеть не ходит). */
+export async function openProjectPage(): Promise<void> {
+  if (isTauri()) await invoke("open_project_page");
+  else window.open(PROJECT_URL, "_blank", "noopener");
+}
+
+export const PROJECT_URL = "https://github.com/Ax1oMgg/svg2tgs";
+
 /** Системный диалог: выбрать SVG-файлы или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
   if (!isTauri()) return [];
