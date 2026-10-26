@@ -16,9 +16,10 @@ rlottie — библиотека, которой Telegram рисует аним�
 | `rlottie-telegram` | https://github.com/desktop-app/rlottie (форк Telegram Desktop) | `cbfdcdd2830b4beba53e64e72c11cb0328a720a9` | **LGPL-2.1** (+ части под FTL, MIT, public domain) | с флагом `--features telegram-rlottie` |
 
 Из исходников убраны файлы сборки (CMake, meson) и привязки для
-WebAssembly. В версию Samsung внесены три правки, в форк Telegram — одна
-(третья). Все помечены в коде комментарием `svg2tgs:` и закреплены тестами
-в `render/src/lib.rs`: без правки тест падает или зависает.
+WebAssembly. В версию Samsung внесены четыре правки, в форк Telegram — одна
+(третья). Все помечены в коде комментарием `svg2tgs:`. Правки 1–3
+закреплены тестами в `render/src/lib.rs` (без правки тест падает или
+зависает), правка 4 — сборкой macOS при выпуске.
 
 ## Правки
 
@@ -42,6 +43,13 @@ WebAssembly. В версию Samsung внесены три правки, в фо
    по-прежнему не рисуется, в том числе в Telegram, поэтому конвертер
    держит группы в пределах 30 000 точек (`MAX_POINTS_PER_SHAPE`).
    Тест `too_many_points_do_not_hang`.
+4. **NEON на ARM отключается** (`src/vector/vdrawhelper_neon.cpp`,
+   `vdrawhelper_common.cpp`, `vdrawhelper.cpp`). Код для NEON вызывает
+   ассемблер pixman (`pixman-arm-neon-asm.S`), написанный для 32-битного
+   ARM; в сборку он не входит, и на Apple Silicon приложение не линковалось.
+   build.rs и так задаёт `LOTTIE_DISABLE_ARM_NEON`, но Samsung, в отличие
+   от форка Telegram, этот флаг не проверял. Теперь проверяет; вместо NEON
+   работает обычный код, как на x86 без SSE2.
 
 ## Почему по умолчанию версия Samsung
 
