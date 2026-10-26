@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: never
+
 jobs:
   prepare:
     name: Черновик релиза

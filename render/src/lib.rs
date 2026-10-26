@@ -56,7 +56,7 @@ impl Image {
 
     fn to_pixmap(&self) -> tiny_skia::Pixmap {
         let mut pm = tiny_skia::Pixmap::new(self.width, self.height).expect("размер > 0");
-        for (dst, src) in pm.pixels_mut().iter_mut().zip(self.rgba.chunks_exact(4)) {
+        for (dst, src) in pm.pixels_mut().iter_mut().zip(self.rgba.as_chunks::<4>().0) {
             *dst = tiny_skia::ColorU8::from_rgba(src[0], src[1], src[2], src[3]).premultiply();
         }
         pm
@@ -121,7 +121,7 @@ pub fn render_lottie(json: &[u8], size: u32, frame: usize) -> Result<Image, Rend
 
     // ARGB32 с умноженной прозрачностью → RGBA с обычной.
     let mut img = Image::new(size, size);
-    for (px, dst) in buf.iter().zip(img.rgba.chunks_exact_mut(4)) {
+    for (px, dst) in buf.iter().zip(img.rgba.as_chunks_mut::<4>().0) {
         let a = (px >> 24) & 0xff;
         if a == 0 {
             continue;
