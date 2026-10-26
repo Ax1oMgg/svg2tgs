@@ -186,7 +186,7 @@ RenderFuncTable::RenderFuncTable()
     updateSrc(BlendMode::DestIn, src_DestinationIn);
     updateSrc(BlendMode::DestOut, src_DestinationOut);
 
-#if defined(__ARM_NEON__)
+#if (defined(__ARM_NEON__) && !defined(LOTTIE_DISABLE_ARM_NEON)) /* svg2tgs: см. vdrawhelper_neon.cpp */
     neon();
 #endif
 #if defined(__SSE2__)

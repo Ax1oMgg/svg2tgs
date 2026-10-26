@@ -1,4 +1,6 @@
-#if defined(__ARM_NEON__)
+/* svg2tgs: NEON-ассемблер pixman (pixman-arm-neon-asm.S) — 32-битный ARM и
+   в сборку не входит; без этой проверки на Apple Silicon не линкуется. */
+#if (defined(__ARM_NEON__) && !defined(LOTTIE_DISABLE_ARM_NEON))
 
 #include "vdrawhelper.h"
 
