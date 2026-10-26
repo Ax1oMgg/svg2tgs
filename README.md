@@ -53,7 +53,7 @@ render/          рендер для превью и тестов: TGS чере�
 cli/             командная строка svg2tgs на том же ядре
 app/             настольное приложение (Tauri 2 + React + TypeScript)
   src/           интерфейс
-  src/styles/tokens.css   дизайн-токены (синхронизируются с Figma)
+  src/styles/tokens.css   дизайн-токены (общие с макетом, docs/DESIGN.md)
   src-tauri/     Rust-часть приложения
 tests/fixtures/  тестовые SVG с описанием, что каждый проверяет
 docs/            функционал, сборка, выпуск, макет
