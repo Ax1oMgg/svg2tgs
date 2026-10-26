@@ -1,10 +1,18 @@
-# Выпуск: метка vX.Y.Z → черновик релиза с установщиками для всех ОС.
+# Выпуск: черновик релиза с установщиками для всех ОС.
+# Запуск — меткой vX.Y.Z или кнопкой Actions → «Выпуск» → Run workflow.
 # Порядок выпуска — docs/RELEASE.md. Опубликовать черновик — вручную на GitHub.
 name: Выпуск
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Что собрать"
+        type: choice
+        options: [все, windows, macos, linux]
+        default: все
 
 permissions:
   contents: write
@@ -18,56 +26,75 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      matrix: ${{ steps.m.outputs.matrix }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Версия в метке совпадает с Cargo.toml
+      - name: Версия
         id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           ver=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
-          if [ "$tag" != "$ver" ]; then
-            echo "::error::Метка v$tag, а в Cargo.toml версия $ver"
-            exit 1
+          tag="v$ver"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+              echo "::error::Метка $GITHUB_REF_NAME, а в Cargo.toml версия $ver"
+              exit 1
+            fi
+          else
+            # Ручной запуск: метка ставится на этот коммит. Уже
+            # опубликованную версию не трогаем — сначала поднимите номер.
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+              echo "::error::Версия $ver уже опубликована. Поднимите номер в Cargo.toml и app/package.json."
+              exit 1
+            fi
+            git tag -f "$tag"
+            git push -f origin "refs/tags/$tag"
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Создать черновик
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-          gh release create "$GITHUB_REF_NAME" --draft --title "svg2tgs ${{ steps.v.outputs.version }}" \
+          tag="${{ steps.v.outputs.tag }}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+          gh release create "$tag" --draft --verify-tag --title "svg2tgs ${{ steps.v.outputs.version }}" \
             --notes-file .github/release-notes.md
+
+      - name: Что собирать
+        id: m
+        run: |
+          all='[{"name":"Windows","os":"windows-latest","kind":"windows"},{"name":"Windows, офлайн","os":"windows-latest","kind":"windows-offline"},{"name":"macOS","os":"macos-latest","kind":"macos"},{"name":"Linux","os":"ubuntu-22.04","kind":"linux"}]'
+          case "${{ inputs.platforms || 'все' }}" in
+            windows) f='startswith("windows")' ;;
+            macos)   f='. == "macos"' ;;
+            linux)   f='. == "linux"' ;;
+            *)       f='true' ;;
+          esac
+          echo "matrix={\"include\":$(echo "$all" | jq -c "[.[] | select(.kind | $f)]")}" >> "$GITHUB_OUTPUT"
 
   build:
     name: ${{ matrix.name }}
     needs: prepare
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            kind: windows
-          - name: Windows, офлайн
-            os: windows-latest
-            kind: windows-offline
-          - name: macOS
-            os: macos-latest
-            kind: macos
-          - name: Linux
-            os: ubuntu-22.04
-            kind: linux
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     env:
       VER: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Библиотеки для Tauri (Linux)
         if: matrix.kind == 'linux'
@@ -91,30 +118,33 @@ jobs:
 
       - name: Зависимости интерфейса
         working-directory: app
-        run: npm ci
+        run: npm ci 2>&1 | tee -a ../build.log; exit ${PIPESTATUS[0]}
 
       - name: Установщик
         working-directory: app
         run: |
           case "${{ matrix.kind }}" in
-            windows)         npm run tauri build -- --bundles nsis ;;
-            windows-offline) npm run tauri build -- --bundles nsis --config src-tauri/tauri.windows-offline.conf.json ;;
-            macos)           npm run tauri build -- --bundles dmg --target universal-apple-darwin ;;
-            linux)           npm run tauri build -- --bundles deb,appimage ;;
+            windows)         args="--bundles nsis" ;;
+            windows-offline) args="--bundles nsis --config src-tauri/tauri.windows-offline.conf.json" ;;
+            macos)           args="--bundles dmg --target universal-apple-darwin" ;;
+            linux)           args="--bundles deb,appimage" ;;
           esac
+          npm run tauri build -- $args 2>&1 | tee -a ../build.log; exit ${PIPESTATUS[0]}
 
       - name: Командная строка
         if: matrix.kind != 'windows-offline'
         run: |
-          case "${{ matrix.kind }}" in
-            macos)
-              cargo build --release -p svg2tgs-cli --target aarch64-apple-darwin
-              cargo build --release -p svg2tgs-cli --target x86_64-apple-darwin
-              lipo -create -output svg2tgs \
-                target/aarch64-apple-darwin/release/svg2tgs target/x86_64-apple-darwin/release/svg2tgs ;;
-            *)
-              cargo build --release -p svg2tgs-cli ;;
-          esac
+          {
+            case "${{ matrix.kind }}" in
+              macos)
+                cargo build --release -p svg2tgs-cli --target aarch64-apple-darwin &&
+                cargo build --release -p svg2tgs-cli --target x86_64-apple-darwin &&
+                lipo -create -output svg2tgs \
+                  target/aarch64-apple-darwin/release/svg2tgs target/x86_64-apple-darwin/release/svg2tgs ;;
+              *)
+                cargo build --release -p svg2tgs-cli ;;
+            esac
+          } 2>&1 | tee -a build.log; exit ${PIPESTATUS[0]}
 
       - name: Собрать файлы релиза
         run: |
@@ -138,19 +168,30 @@ jobs:
           ls -la dist
 
       - name: Загрузить в релиз
-        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+        run: |
+          gh release upload "$TAG" dist/* --clobber
+          gh release delete-asset "$TAG" "build-log-${{ matrix.kind }}.txt" -y 2>/dev/null || true
+
+      # Журнал сборки — в черновик релиза: так причину видно и без доступа
+      # к журналам Actions. После успешной сборки он удаляется.
+      - name: Журнал ошибки в черновик
+        if: failure()
+        run: |
+          grep -v -E '^\s*(Compiling|Checking|Downloaded|Downloading|Fresh) ' build.log 2>/dev/null | tail -n 300 > "build-log-${{ matrix.kind }}.txt" || true
+          gh release upload "$TAG" "build-log-${{ matrix.kind }}.txt" --clobber
 
   checksums:
     name: Контрольные суммы
-    needs: build
+    needs: [prepare, build]
+    if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-22.04
     env:
       GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
       - name: SHA-256 всех файлов
         run: |
           mkdir files && cd files
-          gh release download "$GITHUB_REF_NAME" --pattern 'svg2tgs*'
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'svg2tgs*'
           sha256sum svg2tgs* > SHA256SUMS.txt
-          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber
+          gh release upload "$TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
