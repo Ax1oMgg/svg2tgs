@@ -111,3 +111,53 @@ fn comparison_detects_a_missing_dot() {
     let d = compare(&reference, &result);
     assert!(d.bad_ratio > MAX_BAD, "пропавшая точка не замечена: {d:?}");
 }
+
+/// Обводка вокруг рисунка. Эталон строится вручную: силуэт с обводкой
+/// SVG толщиной 2W и скруглёнными углами — это и есть область, расширенная
+/// на W; дырка кольца заливается.
+#[test]
+fn outline_surrounds_the_silhouette() {
+    use svg2tgs_core::Outline;
+    let art = r##"<path d="M10 10H90V50H50V90H10Z" fill="#2f81f7"/>
+        <circle cx="76" cy="76" r="14" fill="none" stroke="#e5534b" stroke-width="6"/>"##;
+    let svg =
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{art}</svg>"#);
+    let w = 16.0_f32;
+    let options = Options {
+        outline: Some(Outline {
+            width: w,
+            color: "#20c070".into(),
+        }),
+        ..Options::default()
+    };
+    // Рисунок 100×100 вписывается в 512 − 2W.
+    let s = (512.0 - 2.0 * w) / 100.0;
+    let reference = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <g transform="translate({w} {w}) scale({s})">
+        <path d="M10 10H90V50H50V90H10Z M76 59a17 17 0 1 0 0.001 0Z" fill="#20c070"
+            stroke="#20c070" stroke-width="{sw}" stroke-linejoin="round"/>
+        {art}</g></svg>"##,
+        sw = 2.0 * w / s
+    );
+    let conv = convert(svg.as_bytes(), &options).unwrap();
+    let expected = render_svg(reference.as_bytes(), SIZE, &Options::default()).unwrap();
+    let result = render_tgs(&conv.tgs, SIZE, 0).unwrap();
+    let d = compare(&expected, &result);
+    if d.mean > MAX_MEAN || d.bad_ratio > MAX_BAD {
+        std::fs::create_dir_all(diff_dir()).unwrap();
+        let out = diff_dir().join("outline.png");
+        std::fs::write(&out, diff_sheet(&expected, &result).to_png()).unwrap();
+        panic!("обводка не совпала: {d:?}, см. {}", out.display());
+    }
+
+    // Без обводки результат заметно другой — тест действительно её видит.
+    let plain = render_tgs(
+        &convert(svg.as_bytes(), &Options::default()).unwrap().tgs,
+        SIZE,
+        0,
+    )
+    .unwrap();
+    let d = compare(&expected, &plain);
+    assert!(d.bad_ratio > MAX_BAD, "{d:?}");
+}
