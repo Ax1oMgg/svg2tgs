@@ -50,18 +50,101 @@ fn fontdb() -> Arc<usvg::fontdb::Database> {
     DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
         db.load_system_fonts();
+        map_generic_families(&mut db);
         Arc::new(db)
     })
     .clone()
 }
 
+/// Предпочтения для общих семейств CSS (`sans-serif` и т. д.) — первое
+/// установленное. По умолчанию fontdb ждёт Arial и Times New Roman, которых
+/// нет в большинстве Linux: без этой привязки текст молча пропадал.
+const SANS: &[&str] = &[
+    "Arial",
+    "Helvetica",
+    "Segoe UI",
+    "Liberation Sans",
+    "DejaVu Sans",
+    "Noto Sans",
+    "Roboto",
+    "Ubuntu",
+    "Cantarell",
+    "FreeSans",
+];
+const SERIF: &[&str] = &[
+    "Times New Roman",
+    "Times",
+    "Liberation Serif",
+    "DejaVu Serif",
+    "Noto Serif",
+    "FreeSerif",
+    "Georgia",
+];
+const MONO: &[&str] = &[
+    "Courier New",
+    "Menlo",
+    "Consolas",
+    "Liberation Mono",
+    "DejaVu Sans Mono",
+    "Noto Sans Mono",
+    "FreeMono",
+];
+const CURSIVE: &[&str] = &["Comic Sans MS", "Apple Chancery"];
+const FANTASY: &[&str] = &["Impact", "Papyrus"];
+
+fn map_generic_families(db: &mut usvg::fontdb::Database) {
+    let installed: Vec<String> = db
+        .faces()
+        .flat_map(|f| f.families.iter().map(|(name, _)| name.clone()))
+        .collect();
+    let pick = |prefs: &[&str]| {
+        prefs
+            .iter()
+            .find(|p| installed.iter().any(|n| n.eq_ignore_ascii_case(p)))
+            .map(|p| p.to_string())
+    };
+    // Если нет ни одного из привычных шрифтов, подойдёт любой установленный.
+    let Some(sans) = pick(SANS).or_else(|| installed.first().cloned()) else {
+        return;
+    };
+    db.set_serif_family(pick(SERIF).unwrap_or_else(|| sans.clone()));
+    db.set_monospace_family(pick(MONO).unwrap_or_else(|| sans.clone()));
+    db.set_cursive_family(pick(CURSIVE).unwrap_or_else(|| sans.clone()));
+    db.set_fantasy_family(pick(FANTASY).unwrap_or_else(|| sans.clone()));
+    db.set_sans_serif_family(sans);
+}
+
 /// Разбирает SVG в нормализованное дерево usvg с системными шрифтами.
 pub fn parse_svg(svg: &[u8]) -> Result<usvg::Tree, Error> {
+    parse_with(svg, fontdb()).map(|(tree, _)| tree)
+}
+
+/// Разбор с заданной базой шрифтов. Второе значение — был ли текст, для
+/// которого не нашлось ни одного шрифта: usvg такой текст выбрасывает из
+/// дерева, и без этого флага он пропадал бы без замечания.
+fn parse_with(
+    svg: &[u8],
+    fontdb: Arc<usvg::fontdb::Database>,
+) -> Result<(usvg::Tree, bool), Error> {
+    let text_lost = std::sync::atomic::AtomicBool::new(false);
+    let default_select = usvg::FontResolver::default_font_selector();
     let usvg_options = usvg::Options {
-        fontdb: fontdb(),
+        fontdb,
+        font_resolver: usvg::FontResolver {
+            select_font: Box::new(|font, db| {
+                let found = default_select(font, db);
+                if found.is_none() {
+                    text_lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                found
+            }),
+            select_fallback: usvg::FontResolver::default_fallback_selector(),
+        },
         ..usvg::Options::default()
     };
-    usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))
+    let tree =
+        usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))?;
+    Ok((tree, text_lost.load(std::sync::atomic::Ordering::Relaxed)))
 }
 
 /// Ступени автоподгонки под лимит размера: (знаков после запятой,
@@ -81,7 +164,7 @@ const AUTO_LADDER: [(u8, f64); 7] = [
 /// Конвертирует SVG (содержимое файла) в TGS.
 pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
     let background = parse_background(&options.background)?;
-    let tree = parse_svg(svg)?;
+    let (tree, text_lost) = parse_with(svg, fontdb())?;
     let limit = options.preset.max_bytes();
 
     let ladder: Vec<(u8, f64)> = match options.optimization {
@@ -103,6 +186,12 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
 
     let mut warnings = telegram::check_options(options);
     warnings.extend(built.warnings);
+    if text_lost && !warnings.iter().any(|w| w.code == WarningCode::TextDropped) {
+        warnings.push(Warning {
+            code: WarningCode::TextDropped,
+            element_id: None,
+        });
+    }
     if step > 0 {
         warnings.push(Warning {
             code: WarningCode::Simplified {
@@ -299,6 +388,27 @@ fn gzip(data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEXT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="10" y="30" font-family="sans-serif">OK</text></svg>"#;
+
+    #[test]
+    fn text_without_any_font_is_reported() {
+        let (_, lost) = parse_with(TEXT_SVG, Arc::new(usvg::fontdb::Database::new())).unwrap();
+        assert!(lost, "без шрифтов текст пропадает — это должно быть видно");
+    }
+
+    #[test]
+    fn generic_family_falls_back_to_installed_font() {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        if db.is_empty() {
+            return; // в системе нет шрифтов — проверять нечего
+        }
+        map_generic_families(&mut db);
+        let (tree, lost) = parse_with(TEXT_SVG, Arc::new(db)).unwrap();
+        assert!(!lost);
+        assert!(tree.root().has_children(), "текст должен остаться в дереве");
+    }
 
     #[test]
     fn default_options_follow_sticker_preset() {

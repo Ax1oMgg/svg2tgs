@@ -73,6 +73,13 @@ fn main() {
     }
     build.compile("rlottie");
 
+    // lottieparser.cpp на Windows нормализует пути через PathCanonicalizeW
+    // из shlwapi. Приложение подтягивало её через WebView2, а тесты
+    // и командная строка без этой строки не линковались (LNK2019).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=shlwapi");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", root.display());
     println!("cargo:rustc-env=SVG2TGS_RLOTTIE_VENDOR={vendor}");
