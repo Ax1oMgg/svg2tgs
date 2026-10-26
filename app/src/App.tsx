@@ -27,6 +27,7 @@ export function App() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
+  const [version, setVersion] = useState("");
   const pasted = useRef(0);
   const t = strings[prefs.lang];
 
@@ -55,7 +56,10 @@ export function App() {
 
   // Файлы, переданные при запуске, и демонстрационные данные в браузере.
   useEffect(() => {
-    void backend.getAppInfo().then((info) => setBrowserMode(info.runtime === "browser"));
+    void backend.getAppInfo().then((info) => {
+      setBrowserMode(info.runtime === "browser");
+      setVersion(info.version);
+    });
     void backend.startupPaths().then((paths) => {
       if (paths.length > 0) void addPaths(paths);
     });
@@ -144,6 +148,7 @@ export function App() {
             onOptions={(options) => patch({ options })}
             onLang={(lang) => patch({ lang })}
             onTheme={(theme) => patch({ theme })}
+            version={version}
           />
         </div>
       ) : (
@@ -174,6 +179,7 @@ export function App() {
             onOptions={(options) => patch({ options })}
             onLang={(lang) => patch({ lang })}
             onTheme={(theme) => patch({ theme })}
+            version={version}
           />
         </div>
       )}

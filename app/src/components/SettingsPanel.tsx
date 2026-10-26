@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
 import type { Theme } from "../prefs";
@@ -11,10 +12,11 @@ interface Props {
   onOptions: (o: Options) => void;
   onLang: (l: Lang) => void;
   onTheme: (t: Theme) => void;
+  version: string;
 }
 
 /** Настройки конвертации и приложения. */
-export function SettingsPanel({ lang, theme, options, onOptions, onLang, onTheme }: Props) {
+export function SettingsPanel({ lang, theme, options, onOptions, onLang, onTheme, version }: Props) {
   const t = strings[lang];
   const set = (patch: Partial<Options>) => onOptions({ ...options, ...patch });
   const [color, setColor] = useState(
@@ -169,6 +171,22 @@ export function SettingsPanel({ lang, theme, options, onOptions, onLang, onTheme
           <option value="dark">{t.themeDark}</option>
         </select>
       </Field>
+
+      <section className="about" aria-label={t.about}>
+        <h2 className="panel-title">{t.about}</h2>
+        <p>
+          svg2tgs{version && ` · ${t.version(version)}`}
+          <br />
+          {t.aboutProject}
+          <br />
+          {t.aboutAuthor}
+          <br />
+          {t.aboutLicense}
+        </p>
+        <button type="button" className="btn btn--link" onClick={() => void backend.openProjectPage()}>
+          {t.projectPage}
+        </button>
+      </section>
     </aside>
   );
 }

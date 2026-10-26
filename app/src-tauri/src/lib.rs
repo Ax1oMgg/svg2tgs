@@ -243,6 +243,15 @@ fn open_folder(path: String, app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Открывает страницу проекта в браузере. Адрес зашит: окно не может
+/// попросить открыть произвольную ссылку.
+#[tauri::command]
+fn open_project_page(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://github.com/Ax1oMgg/svg2tgs", None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -259,6 +268,7 @@ pub fn run() {
             default_output_dir,
             save,
             open_folder,
+            open_project_page,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить приложение");
