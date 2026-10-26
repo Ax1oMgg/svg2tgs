@@ -7,7 +7,6 @@
 mod files;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
@@ -205,18 +204,10 @@ fn forget(ids: Vec<String>, state: State<'_, AppState>) {
     }
 }
 
-/// Папка для результатов по умолчанию: `tgs` рядом с исходным файлом.
-#[tauri::command]
-fn default_output_dir(source_path: String) -> Option<String> {
-    let parent = PathBuf::from(source_path).parent()?.to_path_buf();
-    Some(parent.join("tgs").to_string_lossy().into_owned())
-}
-
-/// Сохраняет готовые TGS в папку.
+/// Сохраняет готовые TGS: каждый — в свою папку (см. `files::SaveRequest`).
 #[tauri::command]
 async fn save(
     requests: Vec<files::SaveRequest>,
-    dir: String,
     conflict: files::Conflict,
     state: State<'_, AppState>,
 ) -> Result<Vec<files::Saved>, String> {
@@ -230,7 +221,7 @@ async fn save(
             })
             .collect()
     };
-    tauri::async_runtime::spawn_blocking(move || files::save_all(items, &dir, conflict))
+    tauri::async_runtime::spawn_blocking(move || files::save_all(items, conflict))
         .await
         .map_err(|e| e.to_string())
 }
@@ -265,7 +256,6 @@ pub fn run() {
             convert,
             preview,
             forget,
-            default_output_dir,
             save,
             open_folder,
             open_project_page,

@@ -59,10 +59,33 @@ pub fn expand(paths: &[String], recursive: bool) -> Vec<Entry> {
 }
 
 /// Что сохранить: файл `id` под именем `name` (без расширения).
-#[derive(Deserialize, Debug)]
+///
+/// Папка — `dir`, а если она не задана — папка исходного файла `source`.
+/// `subfolder` создаётся внутри неё.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveRequest {
     pub id: String,
     pub name: String,
+    pub dir: Option<String>,
+    pub source: Option<String>,
+    pub subfolder: Option<String>,
+}
+
+impl SaveRequest {
+    /// Папка, куда ляжет файл; `None` — её не из чего взять
+    /// (SVG из буфера без выбранной папки).
+    pub fn folder(&self) -> Option<PathBuf> {
+        let base = match (&self.dir, &self.source) {
+            (Some(d), _) if !d.trim().is_empty() => PathBuf::from(d),
+            (_, Some(s)) => PathBuf::from(s).parent()?.to_path_buf(),
+            _ => return None,
+        };
+        Some(match self.subfolder.as_deref().map(str::trim) {
+            Some(sub) if !sub.is_empty() => base.join(safe_name(sub)),
+            _ => base,
+        })
+    }
 }
 
 /// Что делать, если файл с таким именем уже есть.
@@ -102,13 +125,7 @@ fn safe_name(name: &str) -> String {
     }
 }
 
-pub fn save_all(
-    items: Vec<(SaveRequest, Option<Vec<u8>>)>,
-    dir: &str,
-    conflict: Conflict,
-) -> Vec<Saved> {
-    let dir = PathBuf::from(dir);
-    let dir_ok = std::fs::create_dir_all(&dir).is_ok();
+pub fn save_all(items: Vec<(SaveRequest, Option<Vec<u8>>)>, conflict: Conflict) -> Vec<Saved> {
     items
         .into_iter()
         .map(|(req, tgs)| {
@@ -117,7 +134,10 @@ pub fn save_all(
                 status: "failed",
                 path: None,
             };
-            let (Some(tgs), true) = (tgs, dir_ok) else {
+            let Some(dir) = req.folder() else {
+                return failed;
+            };
+            let (Some(tgs), true) = (tgs, std::fs::create_dir_all(&dir).is_ok()) else {
                 return failed;
             };
             let base = safe_name(&req.name);
@@ -195,19 +215,50 @@ mod tests {
                 SaveRequest {
                     id: id.into(),
                     name: "star".into(),
+                    dir: Some(dir.clone()),
+                    ..Default::default()
                 },
                 Some(vec![1, 2, 3]),
             )
         };
 
-        let first = save_all(vec![req("1")], &dir, Conflict::Number);
+        let first = save_all(vec![req("1")], Conflict::Number);
         assert_eq!(first[0].status, "saved");
-        let skipped = save_all(vec![req("2")], &dir, Conflict::Skip);
+        let skipped = save_all(vec![req("2")], Conflict::Skip);
         assert_eq!(skipped[0].status, "skipped");
-        let numbered = save_all(vec![req("3")], &dir, Conflict::Number);
+        let numbered = save_all(vec![req("3")], Conflict::Number);
         assert!(numbered[0].path.as_ref().unwrap().ends_with("star (2).tgs"));
-        let over = save_all(vec![req("4")], &dir, Conflict::Overwrite);
+        let over = save_all(vec![req("4")], Conflict::Overwrite);
         assert!(over[0].path.as_ref().unwrap().ends_with("star.tgs"));
+    }
+
+    #[test]
+    fn saves_next_to_source_in_subfolder() {
+        let d = tmp("beside");
+        let source = d.join("art").join("heart.svg");
+        let out = save_all(
+            vec![(
+                SaveRequest {
+                    id: "1".into(),
+                    name: "heart_tg".into(),
+                    source: Some(source.to_string_lossy().into_owned()),
+                    subfolder: Some("tgs".into()),
+                    ..Default::default()
+                },
+                Some(vec![1]),
+            )],
+            Conflict::Number,
+        );
+        assert_eq!(out[0].status, "saved");
+        assert!(d.join("art/tgs/heart_tg.tgs").exists());
+
+        // Без папки и без исходного файла (SVG из буфера) сохранить некуда.
+        let nowhere = SaveRequest {
+            id: "2".into(),
+            name: "x".into(),
+            ..Default::default()
+        };
+        assert_eq!(nowhere.folder(), None);
     }
 
     #[test]
@@ -225,10 +276,11 @@ mod tests {
                 SaveRequest {
                     id: "x".into(),
                     name: "x".into(),
+                    dir: Some(d.to_string_lossy().into_owned()),
+                    ..Default::default()
                 },
                 None,
             )],
-            &d.to_string_lossy(),
             Conflict::Overwrite,
         );
         assert_eq!(out[0].status, "failed");

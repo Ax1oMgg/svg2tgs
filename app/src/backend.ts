@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.0", coreVersion: "0.1.0", runtime: "browser" };
+    return { version: "0.1.1", coreVersion: "0.1.1", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -55,13 +55,14 @@ export async function forget(ids: string[]): Promise<void> {
   else ids.forEach((id) => mock.svgs.delete(id));
 }
 
-export async function defaultOutputDir(sourcePath: string): Promise<string | null> {
-  return isTauri() ? invoke<string | null>("default_output_dir", { sourcePath }) : null;
-}
-
-export async function save(requests: SaveRequest[], dir: string, conflict: Conflict): Promise<Saved[]> {
-  if (isTauri()) return invoke<Saved[]>("save", { requests, dir, conflict });
-  return requests.map((r) => ({ id: r.id, status: "saved", path: `${dir}/${r.name}.tgs` }));
+export async function save(requests: SaveRequest[], conflict: Conflict): Promise<Saved[]> {
+  if (isTauri()) return invoke<Saved[]>("save", { requests, conflict });
+  return requests.map((r) => {
+    const dir = r.dir ?? (r.source ? r.source.replace(/[\\/][^\\/]*$/, "") : null);
+    if (!dir) return { id: r.id, status: "failed", path: null };
+    const sub = r.subfolder ? `/${r.subfolder}` : "";
+    return { id: r.id, status: "saved", path: `${dir}${sub}/${r.name}.tgs` };
+  });
 }
 
 export async function openFolder(path: string): Promise<void> {
@@ -89,11 +90,11 @@ export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
   return Array.isArray(picked) ? picked : [picked];
 }
 
-/** Системный диалог: выбрать папку для сохранения. */
-export async function pickFolder(defaultPath?: string): Promise<string | null> {
-  if (!isTauri()) return defaultPath ?? "~/tgs";
+/** Системный диалог: выбрать папку для экспорта. */
+export async function pickFolder(defaultPath?: string, title?: string): Promise<string | null> {
+  if (!isTauri()) return defaultPath ?? "C:\\Users\\demo\\Documents\\stickers";
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({ directory: true, multiple: false, defaultPath });
+  const picked = await open({ directory: true, multiple: false, defaultPath, title });
   return typeof picked === "string" ? picked : null;
 }
 

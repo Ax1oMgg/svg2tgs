@@ -76,6 +76,12 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg }: Props) {
         </div>
       </div>
 
+      {item && (
+        <div className="stage__name" title={item.name}>
+          {item.name}
+        </div>
+      )}
+
       <div className="stage__canvas">
         {!item && <p className="stage__placeholder">{t.noPreview}</p>}
         {item && item.status === "error" && (
@@ -162,7 +168,7 @@ function Chat({
   );
 }
 
-function SegButton({
+export function SegButton({
   active,
   onClick,
   children,

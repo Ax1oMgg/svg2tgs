@@ -26,6 +26,14 @@ Copyright (c) Samsung Electronics Co., Ltd. и авторы, MIT.
 (`render/vendor/rlottie-telegram/licenses/COPYING.LGPL`). В сборки
 по умолчанию не входит. Подробности — `render/vendor/README.md`.
 
+## Значки Lucide
+
+Значки «шестерёнка» (`settings`) и другие контурные значки интерфейса —
+из набора Lucide (https://lucide.dev), лицензия ISC.
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part
+of Feather (MIT). All other copyright (c) for Lucide are held by Lucide
+Contributors 2022.
+
 ## Rust-библиотеки
 
 resvg, usvg, tiny-skia (MIT / Apache-2.0), Tauri (MIT / Apache-2.0),
