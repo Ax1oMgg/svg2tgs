@@ -75,7 +75,7 @@
   --radius-bubble: 16px;
 
   /* Размеры колонок */
-  --width-files: 290px;
+  --width-files: 358px; /* под имя файла — 204 px */
   --width-settings: 280px;
   --height-topbar: 52px;
 

@@ -5,6 +5,7 @@ import { errorText, isInfo, strings, warningText } from "../i18n";
 import type { PreviewBg, PreviewMode } from "../prefs";
 import type { FileItem, Preset } from "../types";
 import { formatSize } from "./FileList";
+import { FileName } from "./FileName";
 
 interface Props {
   lang: Lang;
@@ -75,6 +76,8 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg }: Props) {
           )}
         </div>
       </div>
+
+      {item && <FileName name={item.name} className="stage__name" />}
 
       <div className="stage__canvas">
         {!item && <p className="stage__placeholder">{t.noPreview}</p>}

@@ -1,6 +1,7 @@
 import type { Lang } from "../i18n";
 import { errorText, strings } from "../i18n";
 import type { FileItem } from "../types";
+import { FileName } from "./FileName";
 
 interface Props {
   lang: Lang;
@@ -64,9 +65,7 @@ export function FileList(props: Props) {
               {it.thumb ? <img src={it.thumb} alt="" /> : <span className="file__thumb-empty" />}
             </span>
             <span className="file__body">
-              <span className="file__name" title={it.name}>
-                {it.name}
-              </span>
+              <FileName name={it.name} className="file__name" />
               <span className="file__meta">
                 {it.status === "pending" && t.converting}
                 {it.status === "error" && it.outcome?.error && errorText(it.outcome.error, lang)}

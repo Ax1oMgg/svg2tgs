@@ -126,6 +126,9 @@ const SAMPLE_SVGS: Record<string, string> = {
   "shadow.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="38" fill="#1e9e62"/><circle cx="38" cy="42" r="6" fill="#fff"/><circle cx="62" cy="42" r="6" fill="#fff"/></svg>`,
   "broken.svg": "не svg",
 };
+// Длинные имена одной серии — для проверки обрезки посередине.
+SAMPLE_SVGS["alt_Монтажная область — орнамент старый 1.svg"] = SAMPLE_SVGS["star.svg"];
+SAMPLE_SVGS["Монтажная область 12.svg"] = SAMPLE_SVGS["rocket.svg"];
 
 const mock = {
   svgs: new Map<string, string>(),

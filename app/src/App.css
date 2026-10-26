@@ -342,10 +342,22 @@ input[type="color"] {
   min-width: 0;
 }
 
-.file__name {
+/* Имя, обрезанное посередине (FileName.tsx): начало сжимается, конец — нет. */
+.file-name {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.file-name__head {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+}
+
+.file-name__tail {
+  flex: none;
+  white-space: pre;
 }
 
 .file__meta {
@@ -431,6 +443,11 @@ input[type="color"] {
   gap: var(--space-3);
   flex-wrap: wrap;
   padding: var(--space-3) var(--space-4);
+}
+
+.stage__name {
+  padding: 0 var(--space-4) var(--space-2);
+  font-weight: var(--font-weight-medium);
 }
 
 .stage__canvas {
