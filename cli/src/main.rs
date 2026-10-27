@@ -14,7 +14,7 @@ mod messages;
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use svg2tgs_core::{
-    Background, Fit, Optimization, Options, Outline, Preset, Severity, Warning, MAX_OUTLINE,
+    Background, Crop, Fit, Optimization, Options, Outline, Preset, Severity, Warning, MAX_OUTLINE,
 };
 
 #[derive(Parser, Debug)]
@@ -54,9 +54,38 @@ struct Cli {
     #[arg(long, default_value_t = 0.0, value_parser = parse_padding)]
     padding: f32,
 
-    /// Как вписать рисунок: целиком или заполнить с обрезкой.
+    /// Как вписать рисунок: целиком, заполнить с обрезкой, по ширине,
+    /// по высоте или с масштабом `--scale`.
     #[arg(long, value_enum, default_value_t = FitArg::Contain)]
     fit: FitArg,
+
+    /// Масштаб для `--fit free`, % (100 — целиком).
+    #[arg(long, default_value_t = 100.0)]
+    scale: f32,
+
+    /// Положение в рабочей области X,Y в % (50,50 — по центру).
+    #[arg(long, value_parser = parse_pair, default_value = "50,50")]
+    position: (f32, f32),
+
+    /// Отразить по горизонтали.
+    #[arg(long)]
+    flip_h: bool,
+
+    /// Отразить по вертикали.
+    #[arg(long)]
+    flip_v: bool,
+
+    /// Поворот по часовой стрелке, градусы.
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    rotate: f32,
+
+    /// Пропорции: ширина относительно высоты, % (100 — без искажения).
+    #[arg(long, default_value_t = 100.0)]
+    aspect: f32,
+
+    /// Обрезать края, % стороны: сверху,справа,снизу,слева (например 0,10,0,10).
+    #[arg(long, value_parser = parse_crop)]
+    crop: Option<Crop>,
 
     /// Цвет фона, например #ffffff. По умолчанию прозрачный.
     #[arg(long)]
@@ -101,6 +130,9 @@ struct Cli {
 enum FitArg {
     Contain,
     Cover,
+    Width,
+    Height,
+    Free,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -125,6 +157,35 @@ fn parse_padding(s: &str) -> Result<f32, String> {
         return Err("отступ должен быть от 0 до 20 %".into());
     }
     Ok(v / 100.0)
+}
+
+fn parse_numbers(s: &str, n: usize) -> Result<Vec<f32>, String> {
+    let v: Result<Vec<f32>, _> = s
+        .split(',')
+        .map(|p| p.trim().trim_end_matches('%').parse::<f32>())
+        .collect();
+    match v {
+        Ok(v) if v.len() == n => Ok(v),
+        _ => Err(format!("ожидается {n} числа через запятую")),
+    }
+}
+
+fn parse_pair(s: &str) -> Result<(f32, f32), String> {
+    let v = parse_numbers(s, 2)?;
+    Ok((v[0], v[1]))
+}
+
+fn parse_crop(s: &str) -> Result<Crop, String> {
+    let v = parse_numbers(s, 4)?;
+    if v.iter().any(|x| !(0.0..=95.0).contains(x)) {
+        return Err("обрезка — от 0 до 95 % с каждой стороны".into());
+    }
+    Ok(Crop {
+        top: v[0] / 100.0,
+        right: v[1] / 100.0,
+        bottom: v[2] / 100.0,
+        left: v[3] / 100.0,
+    })
 }
 
 fn parse_outline(s: &str) -> Result<Outline, String> {
@@ -319,7 +380,18 @@ fn main() -> ExitCode {
         fit: match cli.fit {
             FitArg::Contain => Fit::Contain,
             FitArg::Cover => Fit::Cover,
+            FitArg::Width => Fit::Width,
+            FitArg::Height => Fit::Height,
+            FitArg::Free => Fit::Free,
         },
+        scale: cli.scale / 100.0,
+        position_x: cli.position.0 / 100.0,
+        position_y: cli.position.1 / 100.0,
+        flip_h: cli.flip_h,
+        flip_v: cli.flip_v,
+        rotation: cli.rotate,
+        aspect: cli.aspect / 100.0,
+        crop: cli.crop.unwrap_or_default(),
         background: cli
             .bg
             .clone()

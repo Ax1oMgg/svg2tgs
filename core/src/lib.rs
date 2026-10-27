@@ -13,15 +13,15 @@ mod convert;
 mod geometry;
 mod lottie;
 mod options;
+mod placement;
 mod report;
 pub mod telegram;
 
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
 
-use usvg::Transform;
-
-pub use options::{Background, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE};
+pub use options::{Background, Crop, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE};
+pub use placement::{place, Placement};
 
 /// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -273,14 +273,19 @@ fn build(
     tolerance: f64,
 ) -> Result<Built, Error> {
     let canvas = options.effective_canvas_size();
-    let fit = fit_transform(tree.size(), canvas as f32, options);
+    let placement = place(tree.size(), canvas as f32, options);
 
     let round = lottie::Rounder::with_tolerance(decimals, tolerance);
     let mut conv = convert::Converter::new(round);
     if outline.is_some() {
         conv.silhouette = Some(Vec::new());
     }
-    conv.run(tree.root(), fit, canvas as f64);
+    conv.run(
+        tree.root(),
+        placement.transform,
+        placement.clip,
+        canvas as f64,
+    );
     if conv.is_empty() {
         return Err(Error::Empty);
     }
@@ -350,22 +355,6 @@ fn build(
         warnings: conv.warnings,
         thinnest_stroke: conv.thinnest_stroke,
     })
-}
-
-/// Матрица, вписывающая рисунок размера `size` в квадрат `canvas`
-/// с учётом отступа и способа вписывания; рисунок центрируется.
-pub fn fit_transform(size: usvg::Size, canvas: f32, options: &Options) -> Transform {
-    let (w, h) = (size.width(), size.height());
-    let padding = options.padding.clamp(0.0, 0.45);
-    // Обводка рисуется вокруг рисунка, поэтому место под неё вычитается.
-    let area = (canvas * (1.0 - 2.0 * padding) - 2.0 * options.outline_width()).max(1.0);
-    let scale = match options.fit {
-        Fit::Contain => (area / w).min(area / h),
-        Fit::Cover => (area / w).max(area / h),
-    };
-    let tx = (canvas - w * scale) / 2.0;
-    let ty = (canvas - h * scale) / 2.0;
-    Transform::from_row(scale, 0.0, 0.0, scale, tx, ty)
 }
 
 /// Цвет фона из параметров: `None` — прозрачный.

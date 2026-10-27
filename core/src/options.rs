@@ -51,8 +51,24 @@ pub enum Fit {
     /// Целиком, с сохранением пропорций (как `xMidYMid meet`).
     #[default]
     Contain,
-    /// Заполнить канвас, лишнее обрезается (как `xMidYMid slice`).
+    /// Заполнить рабочую область, лишнее обрезается (как `xMidYMid slice`).
     Cover,
+    /// Ширина рисунка равна ширине рабочей области.
+    Width,
+    /// Высота рисунка равна высоте рабочей области.
+    Height,
+    /// Масштаб вручную (`Options::scale`, 1 — как `Contain`).
+    Free,
+}
+
+/// Обрезка краёв рисунка, доли стороны (после отражения, поворота и пропорций).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Crop {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
 }
 
 /// Фон под рисунком.
@@ -104,6 +120,20 @@ pub struct Options {
     /// Отступ от края канваса, доля стороны: 0.0–0.2.
     pub padding: f32,
     pub fit: Fit,
+    /// Масштаб для `Fit::Free`: 1 — рисунок целиком.
+    pub scale: f32,
+    /// Положение в рабочей области по X и Y, 0–1 (0.5 — по центру). Сдвигает
+    /// рисунок по свободному месту или выбирает, какая часть видна, если он больше.
+    pub position_x: f32,
+    pub position_y: f32,
+    /// Отразить по горизонтали / вертикали.
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// Поворот по часовой стрелке, градусы.
+    pub rotation: f32,
+    /// Пропорции: растяжение по ширине относительно высоты (1 — без искажения).
+    pub aspect: f32,
+    pub crop: Crop,
     pub background: Background,
     /// Скругление углов фона, пиксели канваса (0 — прямые углы).
     pub background_radius: f32,
@@ -124,6 +154,14 @@ impl Default for Options {
             preset: Preset::default(),
             padding: 0.0,
             fit: Fit::default(),
+            scale: 1.0,
+            position_x: 0.5,
+            position_y: 0.5,
+            flip_h: false,
+            flip_v: false,
+            rotation: 0.0,
+            aspect: 1.0,
+            crop: Crop::default(),
             background: Background::default(),
             background_radius: 0.0,
             background_border: None,
