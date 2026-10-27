@@ -540,9 +540,9 @@ input[type="color"]:disabled {
 .files__list {
   list-style: none;
   margin: 0;
-  padding: 0 var(--space-2);
-  overflow-y: auto;
+  padding: 0 0 0 var(--space-2);
   flex: 1;
+  min-height: 0;
 }
 
 .files__summary {
@@ -909,10 +909,10 @@ input[type="color"]:disabled {
 /* Панель экспорта ------------------------------------------------------ */
 
 .export {
-  padding: var(--space-4);
+  /* Справа поля нет: его роль играет место полосы прокрутки (.scroll--16). */
+  padding: var(--space-4) 0 var(--space-4) var(--space-4);
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -1030,6 +1030,38 @@ input[type="color"]:disabled {
   cursor: pointer;
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
+}
+
+/* Заголовок раздела: шеврон, название, справа — сброс раздела. */
+.sec {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+
+.sec::-webkit-details-marker {
+  display: none;
+}
+
+.sec__chev {
+  flex: none;
+  transition: transform 0.15s;
+}
+
+details[open] > .sec .sec__chev {
+  transform: rotate(90deg);
+}
+
+.sec__reset {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.field__label .sec__reset {
+  margin-left: auto;
 }
 
 .advanced[open] summary {
@@ -1163,6 +1195,8 @@ input[type="color"]:disabled {
   bottom: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 32px));
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -1312,4 +1346,322 @@ input[type="color"]:disabled {
 .text-link svg {
   margin-left: 4px;
   vertical-align: -1px;
+}
+
+/* Прокрутка: полоса шириной с поле блока и всегда зарезервирована, поэтому
+   при её появлении ничего не сдвигается. Дорожка прозрачная, виден только
+   ползунок 6 px по центру поля. У блока справа отступа нет — правое поле
+   и есть место полосы. */
+.scroll {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.scroll::-webkit-scrollbar {
+  width: 8px;
+  background: transparent;
+}
+
+.scroll--16::-webkit-scrollbar {
+  width: 16px;
+}
+
+.scroll::-webkit-scrollbar-track,
+.scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scroll::-webkit-scrollbar-button {
+  display: none;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar);
+  background-clip: padding-box;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  min-height: 32px;
+}
+
+.scroll--16::-webkit-scrollbar-thumb {
+  border-width: 2px 5px;
+}
+
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-scrollbar-hover);
+  background-clip: padding-box;
+}
+
+.scroll::-webkit-scrollbar-thumb:active {
+  background: var(--color-scrollbar-active);
+  background-clip: padding-box;
+}
+
+/* Мелкие варианты кнопок и полей панели */
+.btn--sm {
+  padding: 5px 8px;
+  font-size: var(--font-size-sm);
+  flex: none;
+}
+
+.btn--square {
+  width: 32px;
+  height: 32px;
+  flex: none;
+}
+
+.btn--pressed,
+.btn--pressed:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.opt-row__label--short {
+  width: 84px;
+  cursor: default;
+}
+
+.opt-row__end {
+  margin-left: auto;
+}
+
+.opt-row .sec__reset {
+  width: 32px;
+  height: 32px;
+}
+
+.segmented--tight .segmented__item {
+  padding: 5px 4px;
+}
+
+.hint--xs {
+  font-size: var(--font-size-xs);
+}
+
+/* Уведомление: текст, действие, «×», полоска таймера */
+.toast__text {
+  min-width: 0;
+}
+
+.toast__timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--color-accent-soft);
+  opacity: 0.8;
+  transition: width 0.05s linear;
+}
+
+/* Окно «файл уже есть» */
+.dialog--conflict {
+  width: min(540px, calc(100vw - 32px));
+}
+
+.dialog--conflict .dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px var(--space-6);
+}
+
+.dialog--conflict .dialog__head {
+  margin: -4px -8px 0 0;
+}
+
+.dialog__warn {
+  flex: none;
+  color: var(--color-warning);
+}
+
+.dialog__title--sm {
+  font-size: 15px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: auto;
+}
+
+.conflict__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.conflict__name > span:first-child {
+  flex: none;
+}
+
+.conflict__input {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding-right: var(--space-2);
+}
+
+.conflict__input input {
+  border: 0;
+  background: transparent;
+  padding: 4px 0 4px var(--space-2);
+  font-size: var(--font-size-sm);
+  outline: none;
+}
+
+.conflict__ext {
+  flex: none;
+}
+
+.conflict__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.conflict__actions .btn:not(.btn--text) {
+  flex: 1;
+  justify-content: center;
+}
+
+.conflict__all {
+  font-size: var(--font-size-sm);
+}
+
+/* Кадрирование мышью */
+.crop {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  background: var(--color-surface-muted);
+}
+
+.crop__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.crop__title {
+  font-weight: var(--font-weight-medium);
+}
+
+.crop__meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.crop__reset {
+  margin-left: auto;
+}
+
+.crop__stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+.crop__box {
+  position: relative;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+.crop__img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: none;
+  max-width: none;
+}
+
+.crop__img--ghost {
+  opacity: 0.3;
+}
+
+.crop__frame {
+  position: absolute;
+  outline: 1.5px solid var(--color-accent);
+  box-shadow: 0 0 0 9999px rgb(15 20 26 / 0.3);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop__clip {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  clip-path: inset(0);
+}
+
+.crop__grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgb(255 255 255 / 0.6) 0 calc(33.33% + 0.5px), transparent 0 calc(66.66% - 0.5px), rgb(255 255 255 / 0.6) 0 calc(66.66% + 0.5px), transparent 0),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgb(255 255 255 / 0.6) 0 calc(33.33% + 0.5px), transparent 0 calc(66.66% - 0.5px), rgb(255 255 255 / 0.6) 0 calc(66.66% + 0.5px), transparent 0);
+}
+
+.crop__handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px;
+  background: #fff;
+  border: 1.5px solid var(--color-accent);
+  border-radius: 2px;
+  box-sizing: border-box;
+  touch-action: none;
+}
+
+.crop__handle--nw { left: 0; top: 0; cursor: nwse-resize; }
+.crop__handle--n { left: 50%; top: 0; cursor: ns-resize; }
+.crop__handle--ne { left: 100%; top: 0; cursor: nesw-resize; }
+.crop__handle--e { left: 100%; top: 50%; cursor: ew-resize; }
+.crop__handle--se { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop__handle--s { left: 50%; top: 100%; cursor: ns-resize; }
+.crop__handle--sw { left: 0; top: 100%; cursor: nesw-resize; }
+.crop__handle--w { left: 0; top: 50%; cursor: ew-resize; }
+
+.crop__stem {
+  position: absolute;
+  left: 50%;
+  top: -26px;
+  height: 20px;
+  border-left: 1.5px solid var(--color-accent);
+  pointer-events: none;
+}
+
+.crop__rotate {
+  position: absolute;
+  left: 50%;
+  top: -32px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 2px solid #fff;
+  box-sizing: border-box;
+  cursor: grab;
+  touch-action: none;
+}
+
+.crop__help {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
 }

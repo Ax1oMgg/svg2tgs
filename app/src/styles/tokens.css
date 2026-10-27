@@ -22,6 +22,10 @@
   /* Фон кнопок без заливки при наведении и нажатии */
   --color-hover: #edf0f3;
   --color-pressed: #e1e6eb;
+  /* Ползунок прокрутки */
+  --color-scrollbar: #c5ccd5;
+  --color-scrollbar-hover: #9aa4b1;
+  --color-scrollbar-active: #7d8796;
   --color-accent-soft: #dce4fb;
   --color-on-accent: #ffffff;
   --color-focus: #3157d5;
@@ -103,6 +107,9 @@
     --color-accent-active: #a3b7f8;
     --color-hover: #222a35;
     --color-pressed: #2b3542;
+    --color-scrollbar: #364252;
+    --color-scrollbar-hover: #4a5869;
+    --color-scrollbar-active: #5d6d80;
     --color-accent-soft: #1f2a4d;
     --color-on-accent: #0f141a;
     --color-focus: #86a0f5;
@@ -133,6 +140,9 @@
   --color-accent-active: #a3b7f8;
   --color-hover: #222a35;
   --color-pressed: #2b3542;
+  --color-scrollbar: #364252;
+  --color-scrollbar-hover: #4a5869;
+  --color-scrollbar-active: #5d6d80;
   --color-accent-soft: #1f2a4d;
   --color-on-accent: #0f141a;
   --color-focus: #86a0f5;

@@ -527,11 +527,7 @@ mod tests {
         for c in [Conflict::Number, Conflict::Overwrite, Conflict::Skip] {
             let plan = plan_outputs(&files, &out, c);
             assert_eq!(plan[0].as_ref().unwrap(), &out.join("icon.tgs"));
-            assert_eq!(
-                plan[1].as_ref().unwrap(),
-                &out.join("icon_1.tgs"),
-                "{c:?}"
-            );
+            assert_eq!(plan[1].as_ref().unwrap(), &out.join("icon_1.tgs"), "{c:?}");
         }
     }
 

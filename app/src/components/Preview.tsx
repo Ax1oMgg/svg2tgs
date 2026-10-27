@@ -14,6 +14,8 @@ interface Props {
   bg: PreviewBg;
   onMode: (m: PreviewMode) => void;
   onBg: (b: PreviewBg) => void;
+  /** Кадрирование мышью — показывается вместо сцены. */
+  cropEditor?: React.ReactNode;
 }
 
 const SIZE = 512;
@@ -23,7 +25,7 @@ const SIZE = 512;
  * текста и крупным сообщением). «Крупно» — исходник и результат рядом.
  * Результат рисуется rlottie — тем же движком, что в Telegram.
  */
-export function Preview({ lang, item, preset, mode, bg, onMode, onBg }: Props) {
+export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor }: Props) {
   const t = strings[lang];
   const [images, setImages] = useState<{ svg: string | null; tgs: string | null }>({
     svg: null,
@@ -83,17 +85,18 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg }: Props) {
       )}
 
       <div className="stage__canvas">
-        {!item && <p className="stage__placeholder">{t.noPreview}</p>}
-        {item && item.status === "error" && (
+        {cropEditor}
+        {!cropEditor && !item && <p className="stage__placeholder">{t.noPreview}</p>}
+        {!cropEditor && item && item.status === "error" && (
           <div className="stage__error">
             <strong>{t.fileFailed}</strong>
             <span>{item.outcome?.error ? errorText(item.outcome.error, lang) : ""}</span>
           </div>
         )}
-        {item && item.status !== "error" && mode === "chat" && (
+        {!cropEditor && item && item.status !== "error" && mode === "chat" && (
           <Chat lang={lang} preset={preset} theme={chatBg} image={images.tgs} />
         )}
-        {item && item.status !== "error" && mode === "closeup" && (
+        {!cropEditor && item && item.status !== "error" && mode === "closeup" && (
           <div className="closeup">
             <figure className={`closeup__frame bg-${bg}`}>
               {images.svg ? <img src={images.svg} alt={t.original} /> : <Spinner />}

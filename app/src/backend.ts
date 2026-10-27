@@ -7,7 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Conflict, Options, Outcome, SaveRequest, Saved, Source } from "./types";
+import type { Existing, Options, Outcome, SaveRequest, Saved, Source } from "./types";
 
 export interface AppInfo {
   version: string;
@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.2", coreVersion: "0.1.2", runtime: "browser" };
+    return { version: "0.1.3", coreVersion: "0.1.3", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -45,7 +45,7 @@ export async function convert(id: string, source: Source, options: Options): Pro
 }
 
 /** Картинка превью (data-URL PNG) или `null`. */
-export async function preview(id: string, kind: "svg" | "tgs", size: number): Promise<string | null> {
+export async function preview(id: string, kind: "svg" | "tgs" | "source", size: number): Promise<string | null> {
   if (isTauri()) return invoke<string | null>("preview", { id, kind, size });
   return mock.preview(id);
 }
@@ -55,8 +55,25 @@ export async function forget(ids: string[]): Promise<void> {
   else ids.forEach((id) => mock.svgs.delete(id));
 }
 
-export async function save(requests: SaveRequest[], conflict: Conflict): Promise<Saved[]> {
-  if (isTauri()) return invoke<Saved[]>("save", { requests, conflict });
+/** Размер рисунка: ширина и высота области просмотра SVG. */
+export async function sourceSize(id: string): Promise<[number, number] | null> {
+  if (isTauri()) return invoke<[number, number] | null>("source_size", { id });
+  const svg = mock.svgs.get(id);
+  const vb = svg?.match(/viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/);
+  return vb ? [Number(vb[1]), Number(vb[2])] : null;
+}
+
+/** Какие результаты лягут на уже существующие файлы. */
+export async function findExisting(requests: SaveRequest[]): Promise<Existing[]> {
+  if (isTauri()) return invoke<Existing[]>("find_existing", { requests });
+  // Браузерный режим: «уже есть» первый файл — чтобы показать окно.
+  const r = requests[0];
+  return r ? [{ id: r.id, fileName: `${r.name}.tgs`, path: `/demo/${r.name}.tgs`, suggested: `${r.name}_1` }] : [];
+}
+
+/** Сохраняет готовые TGS; совпадения без `overwrite` получают номер. */
+export async function save(requests: SaveRequest[]): Promise<Saved[]> {
+  if (isTauri()) return invoke<Saved[]>("save", { requests, conflict: "number" });
   return requests.map((r) => {
     const dir = r.dir ?? (r.source ? r.source.replace(/[\\/][^\\/]*$/, "") : null);
     if (!dir) return { id: r.id, status: "failed", path: null };

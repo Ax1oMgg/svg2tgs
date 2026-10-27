@@ -164,6 +164,8 @@ enum PreviewKind {
     Svg,
     /// Готовый TGS глазами Telegram (rlottie).
     Tgs,
+    /// Исходный SVG без трансформации и размещения — для кадрирования.
+    Source,
 }
 
 /// Картинка превью в виде data-URL PNG; `None`, если рисовать нечего.
@@ -181,6 +183,9 @@ async fn preview(
     tauri::async_runtime::spawn_blocking(move || {
         let image = match kind {
             PreviewKind::Svg => svg2tgs_render::render_svg(&item.svg, size, &item.options).ok(),
+            PreviewKind::Source => {
+                svg2tgs_render::render_svg(&item.svg, size, &Options::default()).ok()
+            }
             PreviewKind::Tgs => item
                 .tgs
                 .as_ref()
@@ -193,6 +198,14 @@ async fn preview(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Размер рисунка (ширина и высота области просмотра SVG).
+#[tauri::command]
+fn source_size(id: String, state: State<'_, AppState>) -> Option<[f32; 2]> {
+    let item = state.items.lock().unwrap().get(&id).cloned()?;
+    let tree = svg2tgs_core::parse_svg(&item.svg).ok()?;
+    Some([tree.size().width(), tree.size().height()])
 }
 
 /// Убирает файлы из памяти (удалены из списка).
@@ -264,6 +277,7 @@ pub fn run() {
             forget,
             save,
             find_existing,
+            source_size,
             open_folder,
             open_project_page,
         ])

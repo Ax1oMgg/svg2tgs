@@ -2,7 +2,20 @@ import { useState } from "react";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
 import type { ExportPrefs, Toggle } from "../prefs";
-import { DEFAULT_BORDER, DEFAULT_OUTLINE, MAX_OUTLINE, MAX_RADIUS, type Options, type Outline } from "../types";
+import {
+  DEFAULT_BORDER,
+  DEFAULT_OPTIONS,
+  DEFAULT_OUTLINE,
+  MAX_RADIUS,
+  SECTION_KEYS,
+  resetKeys,
+  sameKeys,
+  type Fit,
+  type Options,
+  type Outline,
+  type SectionId,
+} from "../types";
+import { ColorRow, NumField, ResetButton, Section, SliderField } from "./controls";
 import { SegButton } from "./Preview";
 
 export type Scope = "all" | "one";
@@ -18,16 +31,27 @@ interface Props {
   selectedName: string | null;
   exportPrefs: ExportPrefs;
   onExportPrefs: (e: ExportPrefs) => void;
+  /** Какие разделы раскрыты. */
+  sections: Partial<Record<SectionId, boolean>>;
+  onSection: (id: SectionId, open: boolean) => void;
   /** Сколько файлов готово к экспорту. */
   readyCount: number;
   exporting: boolean;
   onExport: () => void;
   onChooseDir: () => void;
+  /** Открыть кадрирование мышью в превью. */
+  onCrop: () => void;
 }
+
+const ALL_KEYS = Object.values(SECTION_KEYS).flat();
+
+/** Угол в пределах −180…180. */
+const normAngle = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
 
 /**
  * Панель экспорта: куда и под каким именем сохранить, затем настройки
- * конвертации — общие для всех файлов или свои для выбранного.
+ * конвертации — общие для всех файлов или свои для выбранного. Порядок
+ * обработки рисунка: трансформация → положение → оформление → фон.
  */
 export function ExportPanel(p: Props) {
   const t = strings[p.lang];
@@ -35,7 +59,7 @@ export function ExportPanel(p: Props) {
   const set = (patch: Partial<Options>) => p.onOptions({ ...options, ...patch });
   const setEx = (patch: Partial<ExportPrefs>) => p.onExportPrefs({ ...ex, ...patch });
   const [color, setColor] = useState(options.background.kind === "solid" ? options.background.color : "#ffffff");
-  // Толщина и цвет обводки помнятся, пока она выключена.
+  // Толщина и цвет обводок помнятся, пока обводка выключена.
   const [outline, setOutline] = useState<Outline>(options.outline ?? DEFAULT_OUTLINE);
   const outlineOn = !!options.outline;
   const shownOutline = options.outline ?? outline;
@@ -52,18 +76,38 @@ export function ExportPanel(p: Props) {
     setBorder(next);
     set({ background_border: next });
   };
-  const radius = Math.round(options.background_radius ?? 0);
-  const pad = Math.round(options.padding * 100);
-  const setPad = (v: number) => set({ padding: Math.max(0, Math.min(20, Math.round(v) || 0)) / 100 });
+
+  const crop = options.crop ?? DEFAULT_OPTIONS.crop!;
+  const cropped = crop.top + crop.right + crop.bottom + crop.left > 0;
+  const rotation = options.rotation ?? 0;
+
+  const section = (id: SectionId, title: string, children: React.ReactNode) => (
+    <Section
+      title={title}
+      open={!!p.sections[id]}
+      onToggle={(open) => p.onSection(id, open)}
+      resetTitle={t.resetSection(title)}
+      isDefault={sameKeys(options, DEFAULT_OPTIONS, SECTION_KEYS[id])}
+      onReset={() => p.onOptions(resetKeys(options, SECTION_KEYS[id]))}
+    >
+      {children}
+    </Section>
+  );
 
   const naming: [keyof Pick<ExportPrefs, "suffix" | "prefix" | "subfolder">, string][] = [
     ["suffix", t.suffix],
     ["prefix", t.prefix],
     ["subfolder", t.subfolder],
   ];
+  const fits: [Fit, string, string][] = [
+    ["contain", t.fitContain, t.fitContainHint],
+    ["width", t.fitWidth, t.fitWidthHint],
+    ["height", t.fitHeight, t.fitHeightHint],
+    ["free", t.fitFree, t.fitFreeHint],
+  ];
 
   return (
-    <aside className="export" aria-label={t.exportPanel}>
+    <aside className="export scroll scroll--16" aria-label={t.exportPanel}>
       <h2 className="panel-title">{t.exportPanel}</h2>
       <button
         type="button"
@@ -123,7 +167,14 @@ export function ExportPanel(p: Props) {
       </div>
 
       <div className="export__scope">
-        <div className="field__label">{t.exportSettings}</div>
+        <div className="field__label">
+          <span>{t.exportSettings}</span>
+          <ResetButton
+            title={t.resetAll}
+            disabled={sameKeys(options, DEFAULT_OPTIONS, [...ALL_KEYS, "preset", "optimization"])}
+            onClick={() => p.onOptions({ ...DEFAULT_OPTIONS })}
+          />
+        </div>
         <div className="segmented segmented--wide" role="radiogroup" aria-label={t.exportSettings}>
           <SegButton active={p.scope === "all"} onClick={() => p.onScope("all")}>
             {t.scopeAll}
@@ -132,9 +183,7 @@ export function ExportPanel(p: Props) {
             {t.scopeOne}
           </SegButton>
         </div>
-        {p.scope === "one" && p.selectedName && (
-          <p className="hint">{t.scopeOneHint(p.selectedName)}</p>
-        )}
+        {p.scope === "one" && p.selectedName && <p className="hint">{t.scopeOneHint(p.selectedName)}</p>}
       </div>
 
       <div className="segmented segmented--wide" role="radiogroup" aria-label={t.preset}>
@@ -146,41 +195,192 @@ export function ExportPanel(p: Props) {
         </SegButton>
       </div>
 
-      <details className="advanced">
-        <summary>{t.object}</summary>
-        <div className="section">
+      <div className="field">
+        <div className="field__label">{t.optimization}</div>
+        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
+          {(["auto", "lossless", "manual"] as const).map((mode) => (
+            <SegButton
+              key={mode}
+              active={options.optimization.mode === mode}
+              title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
+              onClick={() =>
+                set({
+                  optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
+                })
+              }
+            >
+              {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
+            </SegButton>
+          ))}
+        </div>
+        {options.optimization.mode === "manual" && (
+          <label className="sub">
+            {t.decimals}
+            <NumField
+              value={options.optimization.precision}
+              min={0}
+              max={6}
+              label={t.decimals}
+              onChange={(v) => set({ optimization: { mode: "manual", precision: Math.round(v) } })}
+            />
+          </label>
+        )}
+      </div>
+
+      {section(
+        "position",
+        t.position,
+        <>
+          <div className="field">
+            <div className="field__label">{t.fit}</div>
+            <div className="segmented segmented--wide segmented--tight" role="radiogroup" aria-label={t.fit}>
+              {fits.map(([fit, label, hint]) => (
+                <SegButton key={fit} active={options.fit === fit} title={hint} onClick={() => set({ fit })}>
+                  {label}
+                </SegButton>
+              ))}
+            </div>
+          </div>
+          {options.fit === "free" && (
+            <SliderField
+              id="scale"
+              label={t.scale}
+              unit="%"
+              min={10}
+              max={400}
+              value={Math.round((options.scale ?? 1) * 100)}
+              onChange={(v) => set({ scale: v / 100 })}
+            />
+          )}
+          <SliderField
+            id="pos-x"
+            label={t.positionX}
+            unit="%"
+            max={100}
+            value={Math.round((options.position_x ?? 0.5) * 1000) / 10}
+            decimals={1}
+            onChange={(v) => set({ position_x: v / 100 })}
+          />
+          <SliderField
+            id="pos-y"
+            label={t.positionY}
+            unit="%"
+            max={100}
+            value={Math.round((options.position_y ?? 0.5) * 1000) / 10}
+            decimals={1}
+            onChange={(v) => set({ position_y: v / 100 })}
+          />
           <SliderField
             id="padding"
             label={t.padding}
             unit="%"
             max={20}
-            value={pad}
-            onChange={setPad}
+            value={Math.round(options.padding * 1000) / 10}
+            decimals={1}
+            onChange={(v) => set({ padding: v / 100 })}
           />
-          <ColorRow
-            label={t.outline}
-            on={outlineOn}
-            onToggle={() => set({ outline: outlineOn ? null : shownOutline })}
-            width={shownOutline.width}
-            onWidth={(width) => changeOutline({ width })}
-            color={shownOutline.color}
-            onColor={(color) => changeOutline({ color })}
-            widthLabel={t.outlineWidth}
-            colorLabel={t.outlineColor}
-          />
-        </div>
-      </details>
+          <p className="hint hint--xs">{t.precisionHint}</p>
+        </>,
+      )}
 
-      <details className="advanced">
-        <summary>{t.background}</summary>
-        <div className="section">
+      {section(
+        "transform",
+        t.transform,
+        <>
+          <div className="opt-row">
+            <span className="opt-row__label opt-row__label--short">{t.flip}</span>
+            <IconToggle pressed={!!options.flip_h} title={t.flipH} onClick={() => set({ flip_h: !options.flip_h })}>
+              <path d="M12 3v18" />
+              <path d="m3 7 5 5-5 5V7" />
+              <path d="m21 7-5 5 5 5V7" />
+            </IconToggle>
+            <IconToggle pressed={!!options.flip_v} title={t.flipV} onClick={() => set({ flip_v: !options.flip_v })}>
+              <path d="M3 12h18" />
+              <path d="m7 3 5 5 5-5H7" />
+              <path d="m7 21 5-5 5 5H7" />
+            </IconToggle>
+          </div>
+          <div className="opt-row">
+            <span className="opt-row__label opt-row__label--short">{t.rotate}</span>
+            <IconToggle title={t.rotateLeft} onClick={() => set({ rotation: normAngle(rotation - 90) })}>
+              <path d="M20 9V7a2 2 0 0 0-2-2h-6" />
+              <path d="m15 2-3 3 3 3" />
+              <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+            </IconToggle>
+            <IconToggle title={t.rotateRight} onClick={() => set({ rotation: normAngle(rotation + 90) })}>
+              <path d="M12 5H6a2 2 0 0 0-2 2v3" />
+              <path d="m9 8 3-3-3-3" />
+              <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+            </IconToggle>
+            <span className="opt-row__unit opt-row__end">
+              <NumField
+                value={rotation}
+                min={-180}
+                max={180}
+                decimals={1}
+                width={52}
+                label={t.rotationAngle}
+                onChange={(v) => set({ rotation: v })}
+              />
+              °
+            </span>
+          </div>
+          <div className="opt-row">
+            <span className="opt-row__label opt-row__label--short">{t.crop}</span>
+            <button type="button" className="btn btn--default btn--sm" title={t.cropHint} onClick={p.onCrop}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+              </svg>
+              {t.cropOpen}
+            </button>
+            {cropped && (
+              <ResetButton
+                title={t.cropReset}
+                disabled={false}
+                onClick={() => set({ crop: { top: 0, right: 0, bottom: 0, left: 0 } })}
+              />
+            )}
+          </div>
+          <SliderField
+            id="aspect"
+            label={t.aspect}
+            unit="%"
+            min={50}
+            max={200}
+            value={Math.round((options.aspect ?? 1) * 100)}
+            onChange={(v) => set({ aspect: v / 100 })}
+          />
+        </>,
+      )}
+
+      {section(
+        "style",
+        t.styleSection,
+        <ColorRow
+          label={t.outline}
+          on={outlineOn}
+          onToggle={() => set({ outline: outlineOn ? null : shownOutline })}
+          width={shownOutline.width}
+          onWidth={(width) => changeOutline({ width })}
+          color={shownOutline.color}
+          onColor={(c) => changeOutline({ color: c })}
+          widthLabel={t.outlineWidth}
+          colorLabel={t.outlineColor}
+        />,
+      )}
+
+      {section(
+        "background",
+        t.background,
+        <>
           <SliderField
             id="radius"
             label={t.radius}
             unit="px"
             max={MAX_RADIUS}
-            value={radius}
-            onChange={(v) => set({ background_radius: Math.max(0, Math.min(MAX_RADIUS, Math.round(v) || 0)) })}
+            value={Math.round(options.background_radius ?? 0)}
+            onChange={(v) => set({ background_radius: Math.round(v) })}
           />
           <ColorRow
             label={t.fill}
@@ -208,179 +408,62 @@ export function ExportPanel(p: Props) {
             widthLabel={t.borderWidth}
             colorLabel={t.borderColor}
           />
-        </div>
-      </details>
+        </>,
+      )}
 
-      <div className="field">
-        <div className="field__label">{t.fit}</div>
-        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.fit}>
-          <SegButton active={options.fit === "contain"} onClick={() => set({ fit: "contain" })} title={t.fitContainHint}>
-            {t.fitContain}
-          </SegButton>
-          <SegButton active={options.fit === "cover"} onClick={() => set({ fit: "cover" })} title={t.fitCoverHint}>
-            {t.fitCover}
-          </SegButton>
-        </div>
-      </div>
-
-      <div className="field">
-        <div className="field__label">{t.optimization}</div>
-        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
-          {(["auto", "lossless", "manual"] as const).map((mode) => (
-            <SegButton
-              key={mode}
-              active={options.optimization.mode === mode}
-              title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
-              onClick={() =>
-                set({
-                  optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
-                })
-              }
-            >
-              {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
-            </SegButton>
-          ))}
-        </div>
-        {options.optimization.mode === "manual" && (
-          <label className="sub">
-            {t.decimals}
+      {section(
+        "extra",
+        t.advanced,
+        <>
+          <div className="field">
+            <label className="field__label" htmlFor="fps">
+              {t.fps}
+            </label>
             <input
-              className="num"
+              id="fps"
               type="number"
-              min={0}
-              max={6}
-              value={options.optimization.precision}
-              onChange={(e) =>
-                set({
-                  optimization: {
-                    mode: "manual",
-                    precision: Math.max(0, Math.min(6, Number(e.target.value) || 0)),
-                  },
-                })
-              }
+              min={1}
+              max={120}
+              placeholder={`60 — ${t.telegramDefault}`}
+              value={options.fps ?? ""}
+              onChange={(e) => set({ fps: e.target.value ? Number(e.target.value) : null })}
             />
-          </label>
-        )}
-      </div>
-
-      <details className="advanced">
-        <summary>{t.advanced}</summary>
-        <div className="field">
-          <label className="field__label" htmlFor="fps">
-            {t.fps}
-          </label>
-          <input
-            id="fps"
-            type="number"
-            min={1}
-            max={120}
-            placeholder={`60 — ${t.telegramDefault}`}
-            value={options.fps ?? ""}
-            onChange={(e) => set({ fps: e.target.value ? Number(e.target.value) : null })}
-          />
-        </div>
-        <div className="field">
-          <label className="field__label" htmlFor="duration">
-            {t.duration}
-          </label>
-          <input
-            id="duration"
-            type="number"
-            min={0.1}
-            max={10}
-            step={0.1}
-            placeholder="1"
-            value={options.duration_secs ?? ""}
-            onChange={(e) => set({ duration_secs: e.target.value ? Number(e.target.value) : null })}
-          />
-        </div>
-      </details>
+          </div>
+          <div className="field">
+            <label className="field__label" htmlFor="duration">
+              {t.duration}
+            </label>
+            <input
+              id="duration"
+              type="number"
+              min={0.1}
+              max={10}
+              step={0.1}
+              placeholder="1"
+              value={options.duration_secs ?? ""}
+              onChange={(e) => set({ duration_secs: e.target.value ? Number(e.target.value) : null })}
+            />
+          </div>
+        </>,
+      )}
     </aside>
   );
 }
 
-/** Числовое поле с единицей и ползунок под ним (отступ, скругление). */
-function SliderField(p: {
-  id: string;
-  label: string;
-  unit: string;
-  max: number;
-  value: number;
-  onChange: (v: number) => void;
-}) {
+/** Квадратная кнопка-значок 32×32; `pressed` — нажатый переключатель. */
+function IconToggle(p: { pressed?: boolean; title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div className="field field--slider">
-      <div className="field__label">
-        <label htmlFor={p.id}>{p.label}</label>
-        <span className="opt-row__unit">
-          <input
-            className="num"
-            type="number"
-            min={0}
-            max={p.max}
-            value={p.value}
-            onChange={(e) => p.onChange(Number(e.target.value))}
-            aria-label={`${p.label}, ${p.unit}`}
-          />
-          {p.unit}
-        </span>
-      </div>
-      <input
-        id={p.id}
-        type="range"
-        min={0}
-        max={p.max}
-        step={1}
-        value={p.value}
-        onChange={(e) => p.onChange(Number(e.target.value))}
-        style={{ "--fill": `${(p.value / p.max) * 100}%` } as React.CSSProperties}
-      />
-    </div>
-  );
-}
-
-/** Строка «флажок + подпись | толщина px | цвет» (обводки, заливка фона). */
-function ColorRow(p: {
-  label: string;
-  on: boolean;
-  onToggle: () => void;
-  /** Без толщины — только цвет (заливка). */
-  width?: number;
-  onWidth?: (w: number) => void;
-  color: string;
-  onColor: (c: string) => void;
-  widthLabel?: string;
-  colorLabel: string;
-}) {
-  return (
-    <div className="opt-row">
-      <label className="opt-row__label">
-        <input type="checkbox" checked={p.on} onChange={p.onToggle} />
-        {p.label}
-      </label>
-      {p.width !== undefined && p.onWidth && (
-        <span className="opt-row__unit">
-          <input
-            className="num"
-            type="number"
-            min={1}
-            max={MAX_OUTLINE}
-            value={p.width}
-            disabled={!p.on}
-            onChange={(e) => p.onWidth!(Math.max(1, Math.min(MAX_OUTLINE, Math.round(Number(e.target.value)) || 1)))}
-            aria-label={p.widthLabel}
-          />
-          px
-        </span>
-      )}
-      <input
-        type="color"
-        value={p.color}
-        disabled={!p.on}
-        onChange={(e) => p.onColor(e.target.value)}
-        aria-label={p.colorLabel}
-        title={p.colorLabel}
-      />
-    </div>
+    <button
+      type="button"
+      className={`btn btn--default btn--icon btn--square${p.pressed ? " btn--pressed" : ""}`}
+      aria-pressed={p.pressed}
+      title={p.title}
+      aria-label={p.title}
+      onClick={p.onClick}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {p.children}
+      </svg>
+    </button>
   );
 }

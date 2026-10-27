@@ -1,7 +1,7 @@
 /** Настройки, которые программа помнит между запусками (localStorage окна). */
 
 import type { Lang } from "./i18n";
-import { DEFAULT_OPTIONS, type Conflict, type Options } from "./types";
+import { DEFAULT_OPTIONS, type Options, type SectionId } from "./types";
 
 export type Theme = "system" | "light" | "dark";
 export type PreviewMode = "chat" | "closeup";
@@ -28,7 +28,8 @@ export interface Prefs {
   theme: Theme;
   recursive: boolean;
   export: ExportPrefs;
-  conflict: Conflict;
+  /** Какие разделы панели раскрыты. */
+  sections: Partial<Record<SectionId, boolean>>;
   previewMode: PreviewMode;
   previewBg: PreviewBg;
 }
@@ -48,7 +49,7 @@ export function defaultPrefs(): Prefs {
       prefix: { on: false, value: "" },
       subfolder: { on: false, value: "" },
     },
-    conflict: "number",
+    sections: { position: true },
     previewMode: "chat",
     previewBg: "light",
   };
@@ -65,6 +66,7 @@ export function loadPrefs(): Prefs {
       ...saved,
       options: { ...base.options, ...saved.options },
       export: { ...base.export, ...saved.export },
+      sections: { ...base.sections, ...saved.sections },
     };
   } catch {
     return base;
