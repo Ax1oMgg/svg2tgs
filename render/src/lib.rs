@@ -156,13 +156,35 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
     let tree = svg2tgs_core::parse_svg(svg)?;
     let background = svg2tgs_core::background_plan(options)?;
     let canvas = options.effective_canvas_size() as f32;
-    let fit = svg2tgs_core::fit_transform(tree.size(), canvas, options);
+    let placement = svg2tgs_core::place(tree.size(), canvas, options);
     let k = size as f32 / canvas;
-    let transform = tiny_skia::Transform::from_scale(k, k).pre_concat(fit);
+    let transform = tiny_skia::Transform::from_scale(k, k).pre_concat(placement.transform);
 
     let mut pm = tiny_skia::Pixmap::new(size, size).expect("размер > 0");
     draw_background(&mut pm, &background, k);
-    resvg::render(&tree, transform, &mut pm.as_mut());
+    // Рисунок — отдельно и поверх фона только внутри видимой области,
+    // как в TGS (там лишнее обрезается геометрически).
+    let mut art = tiny_skia::Pixmap::new(size, size).expect("размер > 0");
+    resvg::render(&tree, transform, &mut art.as_mut());
+    let [x0, y0, x1, y1] = placement.clip.map(|v| v as f32 * k);
+    let mut mask = tiny_skia::Mask::new(size, size).expect("размер > 0");
+    if let Some(rect) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
+        let path = tiny_skia::PathBuilder::from_rect(rect);
+        mask.fill_path(
+            &path,
+            tiny_skia::FillRule::Winding,
+            true,
+            tiny_skia::Transform::identity(),
+        );
+    }
+    pm.draw_pixmap(
+        0,
+        0,
+        art.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        tiny_skia::Transform::identity(),
+        Some(&mask),
+    );
     Ok(Image::from_pixmap(&pm))
 }
 

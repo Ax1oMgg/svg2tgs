@@ -205,3 +205,86 @@ fn rounded_background_with_border() {
         }
     }
 }
+
+/// Трансформация и размещение: отражение, поворот на произвольный угол,
+/// пропорции, обрезка краёв, вписывание по ширине/высоте со сдвигом и отступ.
+/// Эталон — resvg с той же матрицей и обрезкой по видимой области.
+#[test]
+fn transforms_and_placement_match_svg() {
+    use svg2tgs_core::{Crop, Fit};
+    let svg = std::fs::read(fixtures_dir().join("shapes-basic.svg")).unwrap();
+    let cases = [
+        (
+            "flip-rotate",
+            Options {
+                flip_h: true,
+                rotation: 30.0,
+                ..Options::default()
+            },
+        ),
+        (
+            "aspect",
+            Options {
+                aspect: 1.6,
+                ..Options::default()
+            },
+        ),
+        (
+            "crop-width-top",
+            Options {
+                crop: Crop {
+                    left: 0.1,
+                    right: 0.2,
+                    top: 0.05,
+                    bottom: 0.0,
+                },
+                fit: Fit::Width,
+                position_y: 0.0,
+                padding: 0.08,
+                ..Options::default()
+            },
+        ),
+        (
+            "height-left",
+            Options {
+                fit: Fit::Height,
+                rotation: -12.0,
+                position_x: 0.0,
+                ..Options::default()
+            },
+        ),
+        (
+            "free",
+            Options {
+                fit: Fit::Free,
+                scale: 1.4,
+                position_x: 0.8,
+                position_y: 0.3,
+                ..Options::default()
+            },
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, options) in cases {
+        let conv = convert(&svg, &options).unwrap();
+        let reference = render_svg(&svg, SIZE, &options).unwrap();
+        let result = render_tgs(&conv.tgs, SIZE, 0).unwrap();
+        let d = compare(&reference, &result);
+        if d.mean > MAX_MEAN || d.bad_ratio > MAX_BAD {
+            std::fs::create_dir_all(diff_dir()).unwrap();
+            let out = diff_dir().join(format!("placement-{name}.png"));
+            std::fs::write(&out, diff_sheet(&reference, &result).to_png()).unwrap();
+            failures.push(format!("{name}: {d:?}, см. {}", out.display()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    // Проверка проверки: без трансформации картинка заметно другая.
+    let rotated = Options {
+        rotation: 30.0,
+        ..Options::default()
+    };
+    let a = render_svg(&svg, SIZE, &rotated).unwrap();
+    let b = render_tgs(&convert(&svg, &Options::default()).unwrap().tgs, SIZE, 0).unwrap();
+    assert!(compare(&a, &b).bad_ratio > MAX_BAD);
+}

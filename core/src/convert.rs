@@ -71,17 +71,25 @@ impl Converter {
         }
     }
 
-    /// Обходит дерево, начиная с корня, с матрицей вписывания в канвас
-    /// стороной `canvas`. Всё, что выходит за канвас, обрезается:
-    /// по правилам Telegram объекты не должны выходить за его пределы.
-    pub fn run(&mut self, root: &Group, fit: Transform, canvas: f64) {
+    /// Обходит дерево, начиная с корня, с матрицей размещения на канвасе.
+    /// Всё, что выходит за видимую область `clip` (она внутри канваса),
+    /// обрезается: по правилам Telegram объекты не должны выходить за канвас.
+    pub fn run(&mut self, root: &Group, fit: Transform, clip: [f64; 4], canvas: f64) {
+        // Допуск 1 px — только у краёв, совпадающих с краем канваса: выход
+        // за край на доли пикселя (сглаживание, контрольные точки) не виден,
+        // а обрезка спрямляет кривые. Внутри канваса край обрезки точный.
+        let slack = |v: f64, edge: f64, out: f64| if (v - edge).abs() < 0.5 { v + out } else { v };
+        let clip = [
+            slack(clip[0], 0.0, -1.0),
+            slack(clip[1], 0.0, -1.0),
+            slack(clip[2], canvas, 1.0),
+            slack(clip[3], canvas, 1.0),
+        ];
         let ctx = Ctx {
             matrix: fit,
             opacity: 1.0,
             layer_key: Vec::new(),
-            // Допуск 1 px: выход за край на доли пикселя (сглаживание,
-            // контрольные точки у края) не виден, а обрезка спрямляет кривые.
-            clip: Rc::new(Area::from_rect([-1.0, -1.0, canvas + 1.0, canvas + 1.0])),
+            clip: Rc::new(Area::from_rect(clip)),
             layer_opacity: None,
         };
         self.walk_group_children(root, &ctx);

@@ -99,7 +99,7 @@ export function FileList(props: Props) {
         {t.onlyProblems}
       </label>
 
-      <ul className="files__list" role="listbox" aria-label={t.files}>
+      <ul className="files__list scroll" role="listbox" aria-label={t.files}>
         {shown.map((it) => {
           const [head, tail] = splitName(it.name);
           return (

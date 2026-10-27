@@ -78,7 +78,7 @@ fn same_names_in_subfolders_do_not_overwrite_each_other() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(out_dir.join("icon.tgs").exists());
-    assert!(out_dir.join("icon (2).tgs").exists());
+    assert!(out_dir.join("icon_1.tgs").exists());
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn skip_keeps_existing_files() {
         .unwrap();
     assert!(second.status.success());
     assert_eq!(json(&second)[0]["status"], "skipped");
-    assert!(!out_dir.join("evenodd-ring (2).tgs").exists());
+    assert!(!out_dir.join("evenodd-ring_1.tgs").exists());
 }
 
 #[test]
