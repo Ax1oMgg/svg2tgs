@@ -96,7 +96,7 @@ fn skip_keeps_existing_files() {
         .unwrap();
     assert!(second.status.success());
     assert_eq!(json(&second)[0]["status"], "skipped");
-    assert!(!out_dir.join("evenodd-ring (2).tgs").exists());
+    assert!(!out_dir.join("evenodd-ring_1.tgs").exists());
 }
 
 #[test]
