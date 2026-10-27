@@ -78,7 +78,7 @@ fn same_names_in_subfolders_do_not_overwrite_each_other() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(out_dir.join("icon.tgs").exists());
-    assert!(out_dir.join("icon (2).tgs").exists());
+    assert!(out_dir.join("icon_1.tgs").exists());
 }
 
 #[test]
