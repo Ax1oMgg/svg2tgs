@@ -274,9 +274,9 @@ fn plan_outputs(files: &[PathBuf], out_dir: &Path, conflict: Conflict) -> Vec<Op
                     Conflict::Overwrite if !taken.contains(&dst) => {}
                     Conflict::Skip if !taken.contains(&dst) => return None,
                     _ => {
-                        let mut n = 2;
+                        let mut n = 1;
                         while busy(&dst, &taken) {
-                            dst = out_dir.join(format!("{stem} ({n}).tgs"));
+                            dst = out_dir.join(format!("{stem}_{n}.tgs"));
                             n += 1;
                         }
                     }
@@ -529,7 +529,7 @@ mod tests {
             assert_eq!(plan[0].as_ref().unwrap(), &out.join("icon.tgs"));
             assert_eq!(
                 plan[1].as_ref().unwrap(),
-                &out.join("icon (2).tgs"),
+                &out.join("icon_1.tgs"),
                 "{c:?}"
             );
         }
@@ -546,7 +546,7 @@ mod tests {
             plan_outputs(&files, &out, Conflict::Number)[0]
                 .as_ref()
                 .unwrap(),
-            &out.join("star (2).tgs")
+            &out.join("star_1.tgs")
         );
         assert_eq!(
             plan_outputs(&files, &out, Conflict::Overwrite)[0]

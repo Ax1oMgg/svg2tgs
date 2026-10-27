@@ -70,6 +70,9 @@ pub struct SaveRequest {
     pub dir: Option<String>,
     pub source: Option<String>,
     pub subfolder: Option<String>,
+    /// Заменить существующий файл (пользователь выбрал «Перезаписать»).
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 impl SaveRequest {
@@ -94,7 +97,7 @@ impl SaveRequest {
 pub enum Conflict {
     Overwrite,
     Skip,
-    /// Добавить номер: `name (2).tgs`.
+    /// Добавить номер: `name_1.tgs`, `name_2.tgs`…
     Number,
 }
 
@@ -125,6 +128,44 @@ fn safe_name(name: &str) -> String {
     }
 }
 
+/// Первое свободное имя `base_1`, `base_2`… в папке `dir` (без расширения).
+pub fn free_name(dir: &Path, base: &str) -> String {
+    (1..)
+        .map(|n| format!("{base}_{n}"))
+        .find(|name| !dir.join(format!("{name}.tgs")).exists())
+        .expect("свободное имя найдётся")
+}
+
+/// Файл, который уже есть там, куда ляжет результат.
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Existing {
+    pub id: String,
+    /// Имя существующего файла с расширением.
+    pub file_name: String,
+    pub path: String,
+    /// Предлагаемое новое имя без расширения: `name_1`.
+    pub suggested: String,
+}
+
+/// Какие из запросов попадут на существующие файлы.
+pub fn find_existing(requests: &[SaveRequest]) -> Vec<Existing> {
+    requests
+        .iter()
+        .filter_map(|r| {
+            let dir = r.folder()?;
+            let base = safe_name(&r.name);
+            let path = dir.join(format!("{base}.tgs"));
+            path.exists().then(|| Existing {
+                id: r.id.clone(),
+                file_name: format!("{base}.tgs"),
+                path: path.to_string_lossy().into_owned(),
+                suggested: free_name(&dir, &base),
+            })
+        })
+        .collect()
+}
+
 pub fn save_all(items: Vec<(SaveRequest, Option<Vec<u8>>)>, conflict: Conflict) -> Vec<Saved> {
     items
         .into_iter()
@@ -142,7 +183,7 @@ pub fn save_all(items: Vec<(SaveRequest, Option<Vec<u8>>)>, conflict: Conflict) 
             };
             let base = safe_name(&req.name);
             let mut path = dir.join(format!("{base}.tgs"));
-            if path.exists() {
+            if path.exists() && !req.overwrite {
                 match conflict {
                     Conflict::Overwrite => {}
                     Conflict::Skip => {
@@ -153,11 +194,7 @@ pub fn save_all(items: Vec<(SaveRequest, Option<Vec<u8>>)>, conflict: Conflict) 
                         }
                     }
                     Conflict::Number => {
-                        let mut n = 2;
-                        while path.exists() {
-                            path = dir.join(format!("{base} ({n}).tgs"));
-                            n += 1;
-                        }
+                        path = dir.join(format!("{}.tgs", free_name(&dir, &base)));
                     }
                 }
             }
@@ -227,7 +264,14 @@ mod tests {
         let skipped = save_all(vec![req("2")], Conflict::Skip);
         assert_eq!(skipped[0].status, "skipped");
         let numbered = save_all(vec![req("3")], Conflict::Number);
-        assert!(numbered[0].path.as_ref().unwrap().ends_with("star (2).tgs"));
+        assert!(numbered[0].path.as_ref().unwrap().ends_with("star_1.tgs"));
+        let existing = find_existing(&[req("5").0]);
+        assert_eq!(existing.len(), 1);
+        assert_eq!(existing[0].suggested, "star_2");
+        let mut forced = req("6");
+        forced.0.overwrite = true;
+        let replaced = save_all(vec![forced], Conflict::Number);
+        assert!(replaced[0].path.as_ref().unwrap().ends_with("star.tgs"));
         let over = save_all(vec![req("4")], Conflict::Overwrite);
         assert!(over[0].path.as_ref().unwrap().ends_with("star.tgs"));
     }

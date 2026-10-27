@@ -204,6 +204,12 @@ fn forget(ids: Vec<String>, state: State<'_, AppState>) {
     }
 }
 
+/// Какие результаты лягут на уже существующие файлы.
+#[tauri::command]
+fn find_existing(requests: Vec<files::SaveRequest>) -> Vec<files::Existing> {
+    files::find_existing(&requests)
+}
+
 /// Сохраняет готовые TGS: каждый — в свою папку (см. `files::SaveRequest`).
 #[tauri::command]
 async fn save(
@@ -257,6 +263,7 @@ pub fn run() {
             preview,
             forget,
             save,
+            find_existing,
             open_folder,
             open_project_page,
         ])
