@@ -1,6 +1,7 @@
 /** Типы, общие для интерфейса и Rust-части (совпадают с serde в core). */
 
 export type Preset = "sticker" | "emoji";
+export type Bounds = "container" | "content";
 export type Fit = "contain" | "cover" | "width" | "height" | "free";
 
 /** Обрезка краёв, доли стороны — `svg2tgs_core::Crop`. */
@@ -30,6 +31,8 @@ export interface Options {
   preset: Preset;
   /** Доля стороны, 0–0.2. */
   padding: number;
+  /** Рамка рисунка: вся область SVG или по краю рисунка. */
+  bounds?: Bounds;
   fit: Fit;
   /** Масштаб для `free`, 1 — целиком. */
   scale?: number;
@@ -111,6 +114,7 @@ export interface Saved {
 export const DEFAULT_OPTIONS: Options = {
   preset: "sticker",
   padding: 0,
+  bounds: "container",
   fit: "contain",
   scale: 1,
   position_x: 0.5,
@@ -135,11 +139,11 @@ export const DEFAULT_BORDER: Outline = { width: 12, color: "#3157d5" };
 /** Ключи настроек по разделам панели — для сброса раздела и для
  *  автоматического перехода на «этого файла» при правке трансформации. */
 export const SECTION_KEYS = {
-  position: ["fit", "scale", "position_x", "position_y", "padding"],
+  position: ["bounds", "fit", "scale", "position_x", "position_y", "padding"],
   transform: ["flip_h", "flip_v", "rotation", "aspect", "crop"],
   style: ["outline"],
   background: ["background", "background_radius", "background_border"],
-  extra: ["fps", "duration_secs"],
+  extra: ["optimization", "fps", "duration_secs"],
 } as const satisfies Record<string, readonly (keyof Options)[]>;
 
 export type SectionId = keyof typeof SECTION_KEYS;

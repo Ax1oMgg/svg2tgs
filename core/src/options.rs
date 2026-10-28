@@ -61,6 +61,17 @@ pub enum Fit {
     Free,
 }
 
+/// Что считать рамкой рисунка.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Bounds {
+    /// Вся область документа SVG (viewBox), с пустыми полями.
+    #[default]
+    Container,
+    /// Только видимый рисунок с толщиной обводок.
+    Content,
+}
+
 /// Обрезка краёв рисунка, доли стороны (после отражения, поворота и пропорций).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -119,6 +130,8 @@ pub struct Options {
     pub preset: Preset,
     /// Отступ от края канваса, доля стороны: 0.0–0.2.
     pub padding: f32,
+    /// Рамка рисунка: по контейнеру (документу) или по краю рисунка.
+    pub bounds: Bounds,
     pub fit: Fit,
     /// Масштаб для `Fit::Free`: 1 — рисунок целиком.
     pub scale: f32,
@@ -153,6 +166,7 @@ impl Default for Options {
         Self {
             preset: Preset::default(),
             padding: 0.0,
+            bounds: Bounds::default(),
             fit: Fit::default(),
             scale: 1.0,
             position_x: 0.5,

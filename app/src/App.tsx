@@ -11,7 +11,7 @@ import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
 import { strings } from "./i18n";
 import { exportName, exportSubfolder, loadPrefs, savePrefs, type Prefs } from "./prefs";
-import { SECTION_KEYS, sameKeys, type Existing, type Options, type SaveRequest, type Saved } from "./types";
+import { SECTION_KEYS, sameKeys, type Existing, type SectionId, type Options, type SaveRequest, type Saved } from "./types";
 import { effectiveOptions, useFiles } from "./useFiles";
 import "./App.css";
 
@@ -39,6 +39,8 @@ export function App() {
   const [exporting, setExporting] = useState(false);
   const [toast, setToast] = useState<ToastData | null>(null);
   const [cropping, setCropping] = useState(false);
+  // Раскрытые разделы панели — только на время работы; при запуске все свёрнуты.
+  const [sections, setSections] = useState<Partial<Record<SectionId, boolean>>>({});
   const [conflict, setConflict] = useState<ConflictAsk | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
   const [version, setVersion] = useState("");
@@ -210,8 +212,8 @@ export function App() {
       selectedName={selected?.name ?? null}
       exportPrefs={prefs.export}
       onExportPrefs={(e) => patch({ export: e })}
-      sections={prefs.sections}
-      onSection={(id, open) => patch({ sections: { ...prefs.sections, [id]: open } })}
+      sections={sections}
+      onSection={(id, open) => setSections((s) => ({ ...s, [id]: open }))}
       onCrop={() => selected && setCropping(true)}
       readyCount={ready.length}
       exporting={exporting}

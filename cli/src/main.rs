@@ -14,7 +14,8 @@ mod messages;
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use svg2tgs_core::{
-    Background, Crop, Fit, Optimization, Options, Outline, Preset, Severity, Warning, MAX_OUTLINE,
+    Background, Bounds, Crop, Fit, Optimization, Options, Outline, Preset, Severity, Warning,
+    MAX_OUTLINE,
 };
 
 #[derive(Parser, Debug)]
@@ -58,6 +59,10 @@ struct Cli {
     /// по высоте или с масштабом `--scale`.
     #[arg(long, value_enum, default_value_t = FitArg::Contain)]
     fit: FitArg,
+
+    /// Рамка рисунка: container — вся область SVG, content — по краю рисунка.
+    #[arg(long, value_enum, default_value_t = BoundsArg::Container)]
+    bounds: BoundsArg,
 
     /// Масштаб для `--fit free`, % (100 — целиком).
     #[arg(long, default_value_t = 100.0)]
@@ -133,6 +138,12 @@ enum FitArg {
     Width,
     Height,
     Free,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum BoundsArg {
+    Container,
+    Content,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -383,6 +394,10 @@ fn main() -> ExitCode {
             FitArg::Width => Fit::Width,
             FitArg::Height => Fit::Height,
             FitArg::Free => Fit::Free,
+        },
+        bounds: match cli.bounds {
+            BoundsArg::Container => Bounds::Container,
+            BoundsArg::Content => Bounds::Content,
         },
         scale: cli.scale / 100.0,
         position_x: cli.position.0 / 100.0,

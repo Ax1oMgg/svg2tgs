@@ -156,7 +156,7 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
     let tree = svg2tgs_core::parse_svg(svg)?;
     let background = svg2tgs_core::background_plan(options)?;
     let canvas = options.effective_canvas_size() as f32;
-    let placement = svg2tgs_core::place(tree.size(), canvas, options);
+    let placement = svg2tgs_core::place(svg2tgs_core::source_rect(&tree, options), canvas, options);
     let k = size as f32 / canvas;
     let transform = tiny_skia::Transform::from_scale(k, k).pre_concat(placement.transform);
 

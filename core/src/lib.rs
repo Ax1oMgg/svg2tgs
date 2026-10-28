@@ -20,8 +20,10 @@ pub mod telegram;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
 
-pub use options::{Background, Crop, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE};
-pub use placement::{place, Placement};
+pub use options::{
+    Background, Bounds, Crop, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE,
+};
+pub use placement::{place, source_rect, Placement};
 
 /// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -273,7 +275,7 @@ fn build(
     tolerance: f64,
 ) -> Result<Built, Error> {
     let canvas = options.effective_canvas_size();
-    let placement = place(tree.size(), canvas as f32, options);
+    let placement = place(source_rect(tree, options), canvas as f32, options);
 
     let round = lottie::Rounder::with_tolerance(decimals, tolerance);
     let mut conv = convert::Converter::new(round);

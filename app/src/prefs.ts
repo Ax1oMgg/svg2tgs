@@ -1,7 +1,7 @@
 /** Настройки, которые программа помнит между запусками (localStorage окна). */
 
 import type { Lang } from "./i18n";
-import { DEFAULT_OPTIONS, type Options, type SectionId } from "./types";
+import { DEFAULT_OPTIONS, type Options } from "./types";
 
 export type Theme = "system" | "light" | "dark";
 export type PreviewMode = "chat" | "closeup";
@@ -28,8 +28,6 @@ export interface Prefs {
   theme: Theme;
   recursive: boolean;
   export: ExportPrefs;
-  /** Какие разделы панели раскрыты. */
-  sections: Partial<Record<SectionId, boolean>>;
   previewMode: PreviewMode;
   previewBg: PreviewBg;
 }
@@ -49,7 +47,6 @@ export function defaultPrefs(): Prefs {
       prefix: { on: false, value: "" },
       subfolder: { on: false, value: "" },
     },
-    sections: { position: true },
     previewMode: "chat",
     previewBg: "light",
   };
@@ -65,12 +62,21 @@ export function loadPrefs(): Prefs {
       ...base,
       ...saved,
       options: { ...base.options, ...saved.options },
-      export: { ...base.export, ...saved.export },
-      sections: { ...base.sections, ...saved.sections },
+      export: offAtStart({ ...base.export, ...saved.export }),
     };
   } catch {
     return base;
   }
+}
+
+/** При запуске суффикс, префикс и подпапка выключены; текст сохраняется. */
+function offAtStart(e: ExportPrefs): ExportPrefs {
+  return {
+    ...e,
+    suffix: { ...e.suffix, on: false },
+    prefix: { ...e.prefix, on: false },
+    subfolder: { ...e.subfolder, on: false },
+  };
 }
 
 export function savePrefs(p: Prefs): void {

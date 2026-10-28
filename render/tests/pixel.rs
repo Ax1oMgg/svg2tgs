@@ -288,3 +288,37 @@ fn transforms_and_placement_match_svg() {
     let b = render_tgs(&convert(&svg, &Options::default()).unwrap().tgs, SIZE, 0).unwrap();
     assert!(compare(&a, &b).bad_ratio > MAX_BAD);
 }
+
+/// «По краю»: рамка облегает видимый рисунок (с толщиной обводки), пустые
+/// поля документа не учитываются. Эталон — тот же круг, нарисованный на весь
+/// канвас вручную.
+#[test]
+fn content_bounds_hug_the_drawing() {
+    use svg2tgs_core::Bounds;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <circle cx="30" cy="40" r="20" fill="#2f81f7" stroke="#1e9e62" stroke-width="4"/></svg>"##;
+    let options = Options {
+        bounds: Bounds::Content,
+        ..Options::default()
+    };
+    // Рамка 44×44 (радиус 20 + половина обводки 2) — на весь канвас 512.
+    let k = 512.0 / 44.0;
+    let reference = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <circle cx="256" cy="256" r="{r}" fill="#2f81f7" stroke="#1e9e62" stroke-width="{sw}"/></svg>"##,
+        r = 20.0 * k,
+        sw = 4.0 * k
+    );
+    let expected = render_svg(reference.as_bytes(), SIZE, &Options::default()).unwrap();
+    let result = render_tgs(&convert(svg, &options).unwrap().tgs, SIZE, 0).unwrap();
+    let d = compare(&expected, &result);
+    if d.mean > MAX_MEAN || d.bad_ratio > MAX_BAD {
+        std::fs::create_dir_all(diff_dir()).unwrap();
+        let out = diff_dir().join("content-bounds.png");
+        std::fs::write(&out, diff_sheet(&expected, &result).to_png()).unwrap();
+        panic!("рамка по краю: {d:?}, см. {}", out.display());
+    }
+    // По контейнеру — круг мельче и не по центру: картинка заметно другая.
+    let boxed = render_tgs(&convert(svg, &Options::default()).unwrap().tgs, SIZE, 0).unwrap();
+    assert!(compare(&expected, &boxed).bad_ratio > MAX_BAD);
+}

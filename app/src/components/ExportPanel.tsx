@@ -15,7 +15,7 @@ import {
   type Outline,
   type SectionId,
 } from "../types";
-import { ColorRow, NumField, ResetButton, Section, SliderField } from "./controls";
+import { ColorRow, NumField, Range, ResetButton, Section, SliderField } from "./controls";
 import { SegButton } from "./Preview";
 
 export type Scope = "all" | "one";
@@ -107,16 +107,21 @@ export function ExportPanel(p: Props) {
   ];
 
   return (
-    <aside className="export scroll scroll--16" aria-label={t.exportPanel}>
-      <h2 className="panel-title">{t.exportPanel}</h2>
-      <button
-        type="button"
-        className="btn btn--primary btn--wide export__go"
-        disabled={p.readyCount === 0 || p.exporting}
-        onClick={p.onExport}
-      >
-        {t.export}
-      </button>
+    <aside className="export" aria-label={t.exportPanel}>
+      {/* Шапка как у «Файлов»: не прокручивается. */}
+      <div className="export__head">
+        <h2 className="panel-title">{t.exportPanel}</h2>
+        <button
+          type="button"
+          className="btn btn--primary btn--wide"
+          title={t.exportHint}
+          disabled={p.readyCount === 0 || p.exporting}
+          onClick={p.onExport}
+        >
+          {t.export}
+        </button>
+      </div>
+      <div className="export__body scroll scroll--16">
 
       <div className="row export__dest">
         {ex.dir ? (
@@ -141,7 +146,7 @@ export function ExportPanel(p: Props) {
             </svg>
           </button>
         )}
-        <button type="button" className="btn btn--default" onClick={p.onChooseDir}>
+        <button type="button" className="btn btn--default" title={t.chooseHint} onClick={p.onChooseDir}>
           {t.choose}
         </button>
       </div>
@@ -176,10 +181,10 @@ export function ExportPanel(p: Props) {
           />
         </div>
         <div className="segmented segmented--wide" role="radiogroup" aria-label={t.exportSettings}>
-          <SegButton active={p.scope === "all"} onClick={() => p.onScope("all")}>
+          <SegButton active={p.scope === "all"} title={t.scopeAllHint} onClick={() => p.onScope("all")}>
             {t.scopeAll}
           </SegButton>
-          <SegButton active={p.scope === "one"} onClick={() => p.selectedName && p.onScope("one")}>
+          <SegButton active={p.scope === "one"} title={t.scopeOneHint2} onClick={() => p.selectedName && p.onScope("one")}>
             {t.scopeOne}
           </SegButton>
         </div>
@@ -187,50 +192,37 @@ export function ExportPanel(p: Props) {
       </div>
 
       <div className="segmented segmented--wide" role="radiogroup" aria-label={t.preset}>
-        <SegButton active={options.preset === "sticker"} onClick={() => set({ preset: "sticker" })}>
+        <SegButton active={options.preset === "sticker"} title={t.stickerHint} onClick={() => set({ preset: "sticker" })}>
           {t.sticker}
         </SegButton>
-        <SegButton active={options.preset === "emoji"} onClick={() => set({ preset: "emoji" })}>
+        <SegButton active={options.preset === "emoji"} title={t.emojiHint} onClick={() => set({ preset: "emoji" })}>
           {t.emoji}
         </SegButton>
-      </div>
-
-      <div className="field">
-        <div className="field__label">{t.optimization}</div>
-        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
-          {(["auto", "lossless", "manual"] as const).map((mode) => (
-            <SegButton
-              key={mode}
-              active={options.optimization.mode === mode}
-              title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
-              onClick={() =>
-                set({
-                  optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
-                })
-              }
-            >
-              {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
-            </SegButton>
-          ))}
-        </div>
-        {options.optimization.mode === "manual" && (
-          <label className="sub">
-            {t.decimals}
-            <NumField
-              value={options.optimization.precision}
-              min={0}
-              max={6}
-              label={t.decimals}
-              onChange={(v) => set({ optimization: { mode: "manual", precision: Math.round(v) } })}
-            />
-          </label>
-        )}
       </div>
 
       {section(
         "position",
         t.position,
         <>
+          <div className="field">
+            <div className="field__label">{t.bounds}</div>
+            <div className="segmented segmented--wide" role="radiogroup" aria-label={t.bounds}>
+              <SegButton
+                active={(options.bounds ?? "container") === "container"}
+                title={t.boundsContainerHint}
+                onClick={() => set({ bounds: "container" })}
+              >
+                {t.boundsContainer}
+              </SegButton>
+              <SegButton
+                active={options.bounds === "content"}
+                title={t.boundsContentHint}
+                onClick={() => set({ bounds: "content" })}
+              >
+                {t.boundsContent}
+              </SegButton>
+            </div>
+          </div>
           <div className="field">
             <div className="field__label">{t.fit}</div>
             <div className="segmented segmented--wide segmented--tight" role="radiogroup" aria-label={t.fit}>
@@ -300,30 +292,41 @@ export function ExportPanel(p: Props) {
               <path d="m7 21 5-5 5 5H7" />
             </IconToggle>
           </div>
-          <div className="opt-row">
-            <span className="opt-row__label opt-row__label--short">{t.rotate}</span>
-            <IconToggle title={t.rotateLeft} onClick={() => set({ rotation: normAngle(rotation - 90) })}>
-              <path d="M20 9V7a2 2 0 0 0-2-2h-6" />
-              <path d="m15 2-3 3 3 3" />
-              <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
-            </IconToggle>
-            <IconToggle title={t.rotateRight} onClick={() => set({ rotation: normAngle(rotation + 90) })}>
-              <path d="M12 5H6a2 2 0 0 0-2 2v3" />
-              <path d="m9 8 3-3-3-3" />
-              <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-            </IconToggle>
-            <span className="opt-row__unit opt-row__end">
-              <NumField
-                value={rotation}
-                min={-180}
-                max={180}
-                decimals={1}
-                width={52}
-                label={t.rotationAngle}
-                onChange={(v) => set({ rotation: v })}
-              />
-              °
-            </span>
+          <div className="field field--slider">
+            <div className="opt-row">
+              <span className="opt-row__label opt-row__label--short">{t.rotate}</span>
+              <IconToggle title={t.rotateLeft} onClick={() => set({ rotation: normAngle(rotation - 90) })}>
+                <path d="M20 9V7a2 2 0 0 0-2-2h-6" />
+                <path d="m15 2-3 3 3 3" />
+                <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+              </IconToggle>
+              <IconToggle title={t.rotateRight} onClick={() => set({ rotation: normAngle(rotation + 90) })}>
+                <path d="M12 5H6a2 2 0 0 0-2 2v3" />
+                <path d="m9 8 3-3-3-3" />
+                <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+              </IconToggle>
+              <span className="opt-row__unit opt-row__end">
+                <NumField
+                  value={rotation}
+                  min={-180}
+                  max={180}
+                  decimals={1}
+                  width={52}
+                  label={t.rotationAngle}
+                  onChange={(v) => set({ rotation: v })}
+                />
+                °
+              </span>
+            </div>
+            {/* Ползунок −90…+90°, ноль посередине; угол больше 90° — бегунок у края. */}
+            <Range
+              value={Math.max(-90, Math.min(90, rotation))}
+              min={-90}
+              max={90}
+              center
+              label={t.rotationAngle}
+              onChange={(v) => set({ rotation: v })}
+            />
           </div>
           <div className="opt-row">
             <span className="opt-row__label opt-row__label--short">{t.crop}</span>
@@ -416,6 +419,37 @@ export function ExportPanel(p: Props) {
         t.advanced,
         <>
           <div className="field">
+            <div className="field__label">{t.optimization}</div>
+            <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
+              {(["auto", "lossless", "manual"] as const).map((mode) => (
+                <SegButton
+                  key={mode}
+                  active={options.optimization.mode === mode}
+                  title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
+                  onClick={() =>
+                    set({
+                      optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
+                    })
+                  }
+                >
+                  {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
+                </SegButton>
+              ))}
+            </div>
+            {options.optimization.mode === "manual" && (
+              <label className="sub">
+                {t.decimals}
+                <NumField
+                  value={options.optimization.precision}
+                  min={0}
+                  max={6}
+                  label={t.decimals}
+                  onChange={(v) => set({ optimization: { mode: "manual", precision: Math.round(v) } })}
+                />
+              </label>
+            )}
+          </div>
+          <div className="field">
             <label className="field__label" htmlFor="fps">
               {t.fps}
             </label>
@@ -446,6 +480,7 @@ export function ExportPanel(p: Props) {
           </div>
         </>,
       )}
+      </div>
     </aside>
   );
 }

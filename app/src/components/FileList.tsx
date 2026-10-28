@@ -85,7 +85,7 @@ export function FileList(props: Props) {
               </svg>
             </button>
           </div>
-          <button type="button" className="btn btn--text" onClick={props.onClear}>
+          <button type="button" className="btn btn--text" title={t.clearHint} onClick={props.onClear}>
             {t.clear}
           </button>
         </div>

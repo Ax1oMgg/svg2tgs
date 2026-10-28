@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.3", coreVersion: "0.1.3", runtime: "browser" };
+    return { version: "0.1.4", coreVersion: "0.1.4", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -86,13 +86,22 @@ export async function openFolder(path: string): Promise<void> {
   if (isTauri()) await invoke("open_folder", { path });
 }
 
-/** Страница проекта в браузере пользователя (сама программа в сеть не ходит). */
-export async function openProjectPage(): Promise<void> {
-  if (isTauri()) await invoke("open_project_page");
-  else window.open(PROJECT_URL, "_blank", "noopener");
+export type Link = "project" | "issues" | "telegram" | "email";
+
+/** Адреса ссылок «О программе» (в Rust они же — белый список). */
+export const LINKS: Record<Link, string> = {
+  project: "https://github.com/Ax1oMgg/svg2tgs",
+  issues: "https://github.com/Ax1oMgg/svg2tgs/issues",
+  telegram: "https://t.me/chajnaya_Axioma",
+  email: "mailto:chajnayaaxioma@gmail.com",
+};
+
+/** Открыть ссылку в браузере пользователя (сама программа в сеть не ходит). */
+export async function openLink(link: Link): Promise<void> {
+  if (isTauri()) await invoke("open_link", { link });
+  else window.open(LINKS[link], "_blank", "noopener");
 }
 
-export const PROJECT_URL = "https://github.com/Ax1oMgg/svg2tgs";
 
 /** Системный диалог: выбрать SVG-файлы или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
