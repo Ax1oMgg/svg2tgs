@@ -184,7 +184,12 @@ async fn preview(
         let image = match kind {
             PreviewKind::Svg => svg2tgs_render::render_svg(&item.svg, size, &item.options).ok(),
             PreviewKind::Source => {
-                svg2tgs_render::render_svg(&item.svg, size, &Options::default()).ok()
+                // Без трансформации, но с той же рамкой рисунка.
+                let plain = Options {
+                    bounds: item.options.bounds,
+                    ..Options::default()
+                };
+                svg2tgs_render::render_svg(&item.svg, size, &plain).ok()
             }
             PreviewKind::Tgs => item
                 .tgs
@@ -205,7 +210,8 @@ async fn preview(
 fn source_size(id: String, state: State<'_, AppState>) -> Option<[f32; 2]> {
     let item = state.items.lock().unwrap().get(&id).cloned()?;
     let tree = svg2tgs_core::parse_svg(&item.svg).ok()?;
-    Some([tree.size().width(), tree.size().height()])
+    let [_, _, w, h] = svg2tgs_core::source_rect(&tree, &item.options);
+    Some([w, h])
 }
 
 /// Убирает файлы из памяти (удалены из списка).
@@ -253,12 +259,28 @@ fn open_folder(path: String, app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Открывает страницу проекта в браузере. Адрес зашит: окно не может
-/// попросить открыть произвольную ссылку.
+/// Ссылки из «О программе».
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+enum Link {
+    Project,
+    Issues,
+    Telegram,
+    Email,
+}
+
+/// Открывает ссылку в браузере (почту — в почтовой программе). Адреса
+/// зашиты: окно не может попросить открыть произвольную ссылку.
 #[tauri::command]
-fn open_project_page(app: tauri::AppHandle) -> Result<(), String> {
+fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
+    let url = match link {
+        Link::Project => "https://github.com/Ax1oMgg/svg2tgs",
+        Link::Issues => "https://github.com/Ax1oMgg/svg2tgs/issues",
+        Link::Telegram => "https://t.me/chajnaya_Axioma",
+        Link::Email => "mailto:chajnayaaxioma@gmail.com",
+    };
     app.opener()
-        .open_url("https://github.com/Ax1oMgg/svg2tgs", None::<&str>)
+        .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -279,7 +301,7 @@ pub fn run() {
             find_existing,
             source_size,
             open_folder,
-            open_project_page,
+            open_link,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить приложение");

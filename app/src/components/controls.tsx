@@ -69,11 +69,16 @@ export function Range(p: {
   max: number;
   disabled?: boolean;
   label: string;
+  /** Ноль посередине: заливка от центра к бегунку. */
+  center?: boolean;
   onChange: (v: number) => void;
 }) {
   const drag = useRef<{ value: number } | null>(null);
   const span = p.max - p.min;
   const fill = span > 0 ? ((p.value - p.min) / span) * 100 : 0;
+  const style = p.center
+    ? ({ "--from": `${Math.min(50, fill)}%`, "--to": `${Math.max(50, fill)}%` } as React.CSSProperties)
+    : ({ "--fill": `${fill}%` } as React.CSSProperties);
   return (
     <input
       id={p.id}
@@ -84,7 +89,8 @@ export function Range(p: {
       value={p.value}
       disabled={p.disabled}
       aria-label={p.label}
-      style={{ "--fill": `${fill}%` } as React.CSSProperties}
+      className={p.center ? "range--center" : undefined}
+      style={style}
       onChange={(e) => {
         // Клавиатура (стрелки, Home/End) — обычное поведение.
         if (!drag.current) p.onChange(clamp(Math.round(Number(e.target.value)), p.min, p.max));

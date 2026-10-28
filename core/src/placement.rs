@@ -8,7 +8,7 @@
 
 use usvg::Transform;
 
-use crate::options::{Fit, Options};
+use crate::options::{Bounds, Fit, Options};
 
 /// Где и как рисуется рисунок.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,9 +33,28 @@ fn bounds(m: &Transform, w: f32, h: f32) -> [f32; 4] {
     b
 }
 
-/// Размещение рисунка размера `size` на квадратном канвасе стороной `canvas`.
-pub fn place(size: usvg::Size, canvas: f32, options: &Options) -> Placement {
-    let (w, h) = (size.width(), size.height());
+/// Рамка рисунка `[x, y, w, h]` в координатах SVG: вся область документа
+/// или (`Bounds::Content`) только видимый рисунок с толщиной обводок.
+pub fn source_rect(tree: &usvg::Tree, options: &Options) -> [f32; 4] {
+    let (dw, dh) = (tree.size().width(), tree.size().height());
+    if options.bounds == Bounds::Content {
+        let b = tree.root().abs_stroke_bounding_box();
+        // Видно только то, что внутри области документа.
+        let x0 = b.left().max(0.0);
+        let y0 = b.top().max(0.0);
+        let x1 = b.right().min(dw);
+        let y1 = b.bottom().min(dh);
+        if x1 - x0 > 1e-3 && y1 - y0 > 1e-3 {
+            return [x0, y0, x1 - x0, y1 - y0];
+        }
+    }
+    [0.0, 0.0, dw, dh]
+}
+
+/// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
+/// на квадратном канвасе стороной `canvas`.
+pub fn place(rect: [f32; 4], canvas: f32, options: &Options) -> Placement {
+    let [rx, ry, w, h] = rect;
 
     // 1–3. Отразить, повернуть, растянуть — вокруг центра рисунка.
     let fx = if options.flip_h { -1.0 } else { 1.0 };
@@ -53,10 +72,10 @@ pub fn place(size: usvg::Size, canvas: f32, options: &Options) -> Placement {
     let shape = Transform::from_scale(aspect, 1.0)
         .pre_rotate(rotation)
         .pre_scale(fx, fy)
-        .pre_translate(-w / 2.0, -h / 2.0);
+        .pre_translate(-rx - w / 2.0, -ry - h / 2.0);
 
     // 4. Обрезать края — доли рамки, которую видит пользователь.
-    let b = bounds(&shape, w, h);
+    let b = bounds(&shape.pre_translate(rx, ry), w, h);
     let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
     let c = options.crop;
     let frac = |v: f32| {
@@ -126,8 +145,8 @@ pub fn place(size: usvg::Size, canvas: f32, options: &Options) -> Placement {
 mod tests {
     use super::*;
 
-    fn size(w: f32, h: f32) -> usvg::Size {
-        usvg::Size::from_wh(w, h).unwrap()
+    fn size(w: f32, h: f32) -> [f32; 4] {
+        [0.0, 0.0, w, h]
     }
 
     fn map(t: &Transform, x: f32, y: f32) -> (f32, f32) {

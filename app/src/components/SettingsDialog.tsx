@@ -89,28 +89,19 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
       <section className="about" aria-label={t.about}>
         <h3>{t.about}</h3>
         <p>
-          svg2tgs{version && ` · ${t.version(version)}`}
+          <span className="about__name">{t.aboutVersion(version || "—")}</span>
           <br />
-          {t.aboutProject}
+          {t.aboutChannel} <ExtLink link="telegram">{t.aboutChannelLink}</ExtLink>
           <br />
-          {t.aboutAuthor}
+          {t.aboutAuthorFull}
           <br />
-          {t.aboutLicense}
+          {t.aboutLicenseShort}
           <br />
-          {/* Ссылка текстом: открывается в браузере пользователя. */}
-          <a
-            className="text-link"
-            href={backend.PROJECT_URL}
-            onClick={(e) => {
-              e.preventDefault();
-              void backend.openProjectPage();
-            }}
-          >
-            {t.projectPage}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            </svg>
-          </a>
+          {t.aboutProjectPage} <ExtLink link="project">GitHub</ExtLink>
+          <br />
+          {t.aboutIssues} <ExtLink link="issues">GitHub</ExtLink>
+          <br />
+          {t.aboutEmail} <ExtLink link="email">chajnayaaxioma@gmail.com</ExtLink>
         </p>
       </section>
 
@@ -121,5 +112,26 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
       </div>
       </div>
     </dialog>
+  );
+}
+
+/** Ссылка текстом; внешние — со значком ↗, почта — без. Открывается вне программы. */
+function ExtLink({ link, children }: { link: backend.Link; children: React.ReactNode }) {
+  return (
+    <a
+      className="text-link"
+      href={backend.LINKS[link]}
+      onClick={(e) => {
+        e.preventDefault();
+        void backend.openLink(link);
+      }}
+    >
+      {children}
+      {link !== "email" && (
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+        </svg>
+      )}
+    </a>
   );
 }
