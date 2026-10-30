@@ -87,8 +87,12 @@ cargo run --release -p svg2tgs-render --example corpus -- ПАПКА_С_SVG --ou
 
 ## Иконка приложения
 
-Исходник — `app/app-icon.svg`. После правки:
+Два исходника: `app/app-icon.svg` — основная иконка (48 px и больше),
+`app/app-icon-small.svg` — упрощённая для 16–32 px (панель задач, заголовок
+окна, проводник): линии толще, без узлов, без теней. После правки любого
+из них — из корня репозитория (нужны Node и Python с Pillow):
 ```sh
-cd app
-npm run tauri -- icon app-icon.svg -o src-tauri/icons
+python tools/icons.py
 ```
+Скрипт собирает набор `app/src-tauri/icons` (png, ico, icns); в `icon.ico`
+размеры 16, 24 и 32 берутся из упрощённой иконки, 48, 64 и 256 — из основной.

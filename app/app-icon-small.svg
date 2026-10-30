@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Упрощённая иконка для 16–32 px (панель задач, заголовок окна, проводник).
+     Сделана из app-icon.svg: те же лист и уголок, без теней; линии S в 4 раза
+     толще, узлы убраны — на мелких размерах они сливаются. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" x1="18" y1="134" x2="890" y2="1006" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4c94ff"/>
+      <stop offset="1" stop-color="#2156c9"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="774" y1="246.6" x2="679.8" y2="340.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0f0f0"/>
+      <stop offset=".5" stop-color="#f3f3f3"/>
+      <stop offset="1" stop-color="#bdbdbd"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#body)" d="M250.4,76h357c16.4,51.8,16.4,121.3,23.2,182.6,8.2,77.7,69.5,124,155.3,124s121.3,6.8,162.1,27.2v363.8c0,96.7-77.7,174.4-174.4,174.4H250.4c-96.7,0-174.4-77.7-174.4-174.4V250.4c0-96.7,77.7-174.4,174.4-174.4Z"/>
+  <path fill="none" stroke="#fff" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" d="M242.2,243.6h416.9M378.5,243.6c-38.2,25.9-57.2,70.9-57.2,134.9s57.2,133.5,133.5,133.5h117.2c77.7,0,130.8,58.6,130.8,134.9s-54.5,133.5-130.8,133.5"/>
+  <path fill="none" stroke="#fff" stroke-width="72" stroke-linecap="round" d="M242.2,780.4h536.8"/>
+  <path fill="url(#fold)" d="M607.4,76c40.9,38.1,88.6,87.2,141.7,140.3,68.1,68.1,139,137.6,198.9,193.5-38.1-19.1-89.9-25.9-159.4-25.9s-147.1-47.7-155.3-125.4c-6.8-61.3-9.5-130.8-25.9-182.6Z"/>
+</svg>
