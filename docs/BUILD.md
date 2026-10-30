@@ -96,3 +96,20 @@ python tools/icons.py
 ```
 Скрипт собирает набор `app/src-tauri/icons` (png, ico, icns); в `icon.ico`
 размеры 16, 24 и 32 берутся из упрощённой иконки, 48, 64 и 256 — из основной.
+
+## Зависимости и безопасность сборки
+
+- Шаги GitHub Actions подключены по хешу коммита, версия — в комментарии
+  (`actions/checkout@fbc6f39… # v5.1.0`). Метку версии автор шага может
+  перевесить на другой код, хеш — нет. Новый шаг подключать так же.
+- Проверка «Уязвимости» (`.github/workflows/audit.yml`) в каждом PR и раз
+  в неделю сверяет `Cargo.lock` с базой RustSec, а `app/package-lock.json` —
+  с базой npm. Падает на известной уязвимости. Предупреждения («заброшена»,
+  «unsound») только пишет в журнал.
+- Dependabot (`.github/dependabot.yml`) раз в месяц предлагает PR
+  с обновлениями: шаги сборки, Rust, npm — по одному PR на каждую группу.
+- Руками, перед выпуском:
+  ```sh
+  cargo install cargo-audit --locked && cargo audit
+  (cd app && npm audit --omit=dev)
+  ```
