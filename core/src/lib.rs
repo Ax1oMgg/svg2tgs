@@ -21,9 +21,9 @@ use std::io::Write;
 use std::sync::{Arc, OnceLock};
 
 pub use options::{
-    Background, Bounds, Crop, Fit, Optimization, Options, Outline, Preset, MAX_OUTLINE,
+    Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, MAX_OUTLINE,
 };
-pub use placement::{place, source_rect, Placement};
+pub use placement::{board_size, place, shaped_aspect, source_rect, Placement};
 
 /// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,6 +35,7 @@ pub struct BackgroundPlan {
     pub radius: f64,
 }
 pub use report::{Conversion, Severity, Warning, WarningCode};
+
 /// usvg той же версии, что использует ядро, — для рендера эталона (resvg).
 pub use usvg;
 
@@ -173,33 +174,92 @@ const AUTO_LADDER: [(u8, f64); 7] = [
     (0, 2.5),
 ];
 
-/// Конвертирует SVG (содержимое файла) в TGS.
+/// Сетка нарезки по пропорциям рисунка после трансформаций и обрезки,
+/// не больше `max_cols` столбцов (см. [`Grid::auto`]).
+pub fn auto_grid(tree: &usvg::Tree, options: &Options, max_cols: u32) -> Grid {
+    Grid::auto(shaped_aspect(source_rect(tree, options), options), max_cols)
+}
+
+/// Итог нарезки: сетка (подобранная, если `grid_auto`) и файлы клеток
+/// по строкам слева направо.
+#[derive(Debug)]
+pub struct Tiles {
+    pub grid: Grid,
+    pub tiles: Vec<Conversion>,
+}
+
+/// Конвертирует SVG (содержимое файла) в TGS. Нарезка (`Options::grid`)
+/// здесь не действует — рисунок ложится на один канвас; для нарезки —
+/// [`convert_grid`].
 pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
-    let background = background_plan(options)?;
-    let outline = match &options.outline {
+    let single = Options {
+        grid: None,
+        ..options.clone()
+    };
+    let mut out = convert_grid(svg, &single)?;
+    Ok(out.tiles.remove(0))
+}
+
+/// Конвертирует SVG в набор эмодзи по сетке `Options::grid`: по файлу
+/// на клетку, по строкам слева направо. Без сетки — один файл. Пустые
+/// клетки тоже возвращаются (прозрачные), чтобы сетка не съехала.
+pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
+    let outline_rgb = match &options.outline {
         Some(o) if options.outline_width() > 0.0 => Some(parse_color(&o.color, "обводки")?),
         _ => None,
     };
     let (tree, text_lost) = parse_with(svg, fontdb())?;
-    let limit = options.preset.max_bytes();
+    let mut options = options.clone();
+    if options.grid.is_some() && options.grid_auto {
+        options.grid = Some(auto_grid(&tree, &options, Grid::AUTO_COLS));
+    }
+    let options = &options;
+    let board = Board::new(&tree, options, outline_rgb)?;
 
     let ladder: Vec<(u8, f64)> = match options.optimization {
         Optimization::Auto => AUTO_LADDER.to_vec(),
         Optimization::Lossless => vec![(3, 0.0)],
         Optimization::Manual(n) => vec![(n.min(6), 0.05)],
     };
+    let limit = options.preset.max_bytes();
 
-    let mut result = None;
-    for (step, &(decimals, tolerance)) in ladder.iter().enumerate() {
-        let built = build(&tree, options, background, outline, decimals, tolerance)?;
-        let fits = built.tgs.len() <= limit && built.max_points <= telegram::MAX_POINTS_PER_SHAPE;
-        result = Some((step, tolerance, built));
-        if fits {
-            break;
+    let mut out = Vec::new();
+    let mut drawn = false;
+    for row in 0..board.grid.rows {
+        for col in 0..board.grid.cols {
+            let mut result = None;
+            for (step, &(decimals, tolerance)) in ladder.iter().enumerate() {
+                let built = board.build(&tree, options, (col, row), decimals, tolerance);
+                let fits =
+                    built.tgs.len() <= limit && built.max_points <= telegram::MAX_POINTS_PER_SHAPE;
+                result = Some((step, tolerance, built));
+                if fits {
+                    break;
+                }
+            }
+            let (step, tolerance, built) = result.expect("в лестнице есть хотя бы одна ступень");
+            drawn |= !built.empty;
+            out.push(finish(built, options, step, tolerance, text_lost, limit));
         }
     }
-    let (step, tolerance, built) = result.expect("в лестнице есть хотя бы одна ступень");
+    if !drawn {
+        return Err(Error::Empty);
+    }
+    Ok(Tiles {
+        grid: board.grid,
+        tiles: out,
+    })
+}
 
+/// Замечания к готовому файлу.
+fn finish(
+    built: Built,
+    options: &Options,
+    step: usize,
+    tolerance: f64,
+    text_lost: bool,
+    limit: usize,
+) -> Conversion {
     let mut warnings = telegram::check_options(options);
     warnings.extend(built.warnings);
     if text_lost && !warnings.iter().any(|w| w.code == WarningCode::TextDropped) {
@@ -248,12 +308,11 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
             element_id: None,
         });
     }
-
-    Ok(Conversion {
+    Conversion {
         tgs: built.tgs,
         json_bytes: built.json_bytes,
         warnings,
-    })
+    }
 }
 
 struct Built {
@@ -263,100 +322,312 @@ struct Built {
     thinnest_stroke: Option<f64>,
     /// Точек в самой сложной группе (см. `telegram::MAX_POINTS_PER_SHAPE`).
     max_points: usize,
+    /// В клетке ничего не нарисовано (ни рисунка, ни обводки, ни фона).
+    empty: bool,
 }
 
-/// Один проход конвертации с заданной точностью.
-fn build(
-    tree: &usvg::Tree,
-    options: &Options,
+/// Холст: все канвасы сетки и то, что считается для него целиком —
+/// размещение, видимая область, обводка вокруг всего рисунка, фон.
+struct Board {
+    grid: Grid,
+    /// Сторона одного канваса.
+    tile: f64,
+    placement: Placement,
     background: BackgroundPlan,
-    outline: Option<[u8; 3]>,
-    decimals: u8,
-    tolerance: f64,
-) -> Result<Built, Error> {
-    let canvas = options.effective_canvas_size();
-    let placement = place(source_rect(tree, options), canvas as f32, options);
+    /// Рамка фона, по которой обрезается рисунок (координаты холста).
+    frame: Option<clip::Contours>,
+    /// Цвет обводки рисунка и (для сетки) её готовая область на холсте.
+    outline: Option<([u8; 3], Option<clip::Contours>)>,
+}
 
-    let round = lottie::Rounder::with_tolerance(decimals, tolerance);
-    let mut conv = convert::Converter::new(round);
-    if outline.is_some() {
-        conv.silhouette = Some(Vec::new());
-    }
-    conv.run(
-        tree.root(),
-        placement.transform,
-        placement.clip,
-        canvas as f64,
-    );
-    if conv.is_empty() {
-        return Err(Error::Empty);
+impl Board {
+    fn new(
+        tree: &usvg::Tree,
+        options: &Options,
+        outline_rgb: Option<[u8; 3]>,
+    ) -> Result<Self, Error> {
+        let grid = options.grid();
+        let tile = options.effective_canvas_size();
+        let (w, h) = placement::board_size(tile as f32, grid);
+        let (w, h) = (w as f64, h as f64);
+        let placement = place(source_rect(tree, options), tile as f32, grid, options);
+        let background = background_plan_for(options, w, h)?;
+        let frame = (options.background_clip
+            && (background.fill.is_some() || background.border.is_some()))
+        .then(|| {
+            let inset = background.border.map_or(0.0, |(_, bw)| bw);
+            clip::flatten(&[rounded_rect(
+                inset,
+                inset,
+                w - inset,
+                h - inset,
+                background.radius - inset,
+            )])
+        });
+        let mut board = Self {
+            grid,
+            tile: tile as f64,
+            placement,
+            background,
+            frame,
+            outline: outline_rgb.map(|rgb| (rgb, None)),
+        };
+        // Без нарезки обводка собирается в том же проходе, что и рисунок.
+        // С нарезкой — заранее, по всему рисунку: иначе она легла бы
+        // и вдоль разрезов между клетками.
+        if let (Some(rgb), true) = (outline_rgb, grid.cols * grid.rows > 1) {
+            let round = lottie::Rounder::with_tolerance(AUTO_LADDER[0].0, AUTO_LADDER[0].1);
+            let mut conv = convert::Converter::new(round);
+            conv.silhouette = Some(Vec::new());
+            conv.run(tree.root(), placement.transform, board.area(None));
+            let silhouette = conv.silhouette.take().unwrap_or_default();
+            board.outline = Some((rgb, Some(board.outline_region(&silhouette, options))));
+        }
+        Ok(board)
     }
 
-    let frames = options.frame_count();
-    let mut layers = Vec::new();
-    // В Lottie первый слой — верхний, в SVG последний элемент рисуется поверх.
-    for draft in conv.layers.into_iter().rev() {
-        let mut items = draft.items;
-        items.reverse();
-        let mut layer = lottie::Layer::new(0, frames, items);
-        layer
-            .ks
-            .set_opacity(lottie::Rounder::new(3).num(draft.opacity * 100.0));
-        layers.push(layer);
+    fn size(&self) -> (f64, f64) {
+        (
+            self.tile * self.grid.cols as f64,
+            self.tile * self.grid.rows as f64,
+        )
     }
-    // Обводка — под рисунком, над фоном; за канвас не выходит.
-    if let (Some(color), Some(silhouette)) = (outline, conv.silhouette.take()) {
-        let width = options.outline_width() as f64;
-        let c = canvas as f64;
-        let area = clip::intersect(
-            &clip::outline(&silhouette, width),
-            &clip::rect([0.0, 0.0, c, c]),
-        );
-        if !area.is_empty() {
-            let beziers = clip::to_beziers(&area, &round);
-            layers.push(fill_layer(
-                "outline",
-                beziers,
-                color,
-                lottie::FILL_RULE_NONZERO,
-                frames,
-            ));
+
+    /// Видимая область в координатах холста или (с `cell`) клетки.
+    /// Край, совпадающий с краем холста, получает допуск 1 px: выход за край
+    /// на доли пикселя (сглаживание, контрольные точки) не виден, а обрезка
+    /// спрямляет кривые. Внутри холста край обрезки точный.
+    fn area(&self, cell: Option<(u32, u32)>) -> clip::Area {
+        let (w, h) = self.size();
+        let slack = |v: f64, edge: f64, out: f64| if (v - edge).abs() < 0.5 { v + out } else { v };
+        let c = self.placement.clip;
+        let mut r = [
+            slack(c[0], 0.0, -1.0),
+            slack(c[1], 0.0, -1.0),
+            slack(c[2], w, 1.0),
+            slack(c[3], h, 1.0),
+        ];
+        let (dx, dy) = self.offset(cell);
+        if let Some((col, row)) = cell {
+            let t = self.tile;
+            let x0 = col as f64 * t;
+            let y0 = row as f64 * t;
+            r = [
+                r[0].max(if col == 0 { -1.0 } else { x0 }),
+                r[1].max(if row == 0 { -1.0 } else { y0 }),
+                r[2].min(if col + 1 == self.grid.cols {
+                    w + 1.0
+                } else {
+                    x0 + t
+                }),
+                r[3].min(if row + 1 == self.grid.rows {
+                    h + 1.0
+                } else {
+                    y0 + t
+                }),
+            ];
+            r = [r[0] - dx, r[1] - dy, r[2] - dx, r[3] - dy];
+            if r[2] <= r[0] || r[3] <= r[1] {
+                return clip::Area::from_rect([0.0, 0.0, 0.0, 0.0]).intersect(&Vec::new());
+            }
+        }
+        let area = clip::Area::from_rect(r);
+        match &self.frame {
+            Some(f) => area.intersect(&clip::translate(f, -dx, -dy)),
+            None => area,
         }
     }
-    layers.extend(background_layers(&background, canvas, frames));
-    for (n, layer) in layers.iter_mut().enumerate() {
-        layer.ind = n as u32 + 1;
+
+    /// Сдвиг клетки относительно холста.
+    fn offset(&self, cell: Option<(u32, u32)>) -> (f64, f64) {
+        cell.map_or((0.0, 0.0), |(c, r)| {
+            (c as f64 * self.tile, r as f64 * self.tile)
+        })
     }
 
-    let animation = lottie::Animation {
-        v: "5.7.4",
-        fr: lottie::Num(options.effective_fps() as f64),
-        ip: lottie::Num(0.0),
-        op: lottie::Num(frames as f64),
-        w: canvas,
-        h: canvas,
-        nm: "svg2tgs",
-        ddd: 0,
-        assets: [],
-        layers,
-        tgs: 1,
-    };
-    let max_points = animation
-        .layers
-        .iter()
-        .flat_map(|l| &l.shapes)
-        .map(lottie::Shape::rlottie_points)
-        .max()
-        .unwrap_or(0);
-    let json =
-        serde_json::to_vec(&animation).expect("сериализация Lottie не может завершиться ошибкой");
-    Ok(Built {
-        max_points,
-        tgs: gzip(&json),
-        json_bytes: json.len(),
-        warnings: conv.warnings,
-        thinnest_stroke: conv.thinnest_stroke,
-    })
+    /// Обводка вокруг силуэта: не выходит за холст и за рамку фона.
+    fn outline_region(&self, silhouette: &clip::Contours, options: &Options) -> clip::Contours {
+        let (w, h) = self.size();
+        let width = options.outline_width() as f64;
+        let mut area = clip::intersect(
+            &clip::outline(silhouette, width),
+            &clip::rect([0.0, 0.0, w, h]),
+        );
+        if let Some(f) = &self.frame {
+            area = clip::intersect(&area, f);
+        }
+        area
+    }
+
+    /// Один проход конвертации клетки `cell` с заданной точностью.
+    fn build(
+        &self,
+        tree: &usvg::Tree,
+        options: &Options,
+        cell: (u32, u32),
+        decimals: u8,
+        tolerance: f64,
+    ) -> Built {
+        let single = self.grid.cols * self.grid.rows == 1;
+        let canvas = self.tile;
+        let (dx, dy) = self.offset(Some(cell));
+        let fit = usvg::Transform::from_translate(-dx as f32, -dy as f32)
+            .pre_concat(self.placement.transform);
+
+        let round = lottie::Rounder::with_tolerance(decimals, tolerance);
+        let mut conv = convert::Converter::new(round);
+        if single && self.outline.is_some() {
+            conv.silhouette = Some(Vec::new());
+        }
+        let area = if single {
+            self.area(None)
+        } else {
+            self.area(Some(cell))
+        };
+        conv.run(tree.root(), fit, area);
+
+        let frames = options.frame_count();
+        let mut layers = Vec::new();
+        // В Lottie первый слой — верхний, в SVG последний элемент рисуется поверх.
+        for draft in conv.layers.into_iter().rev() {
+            if draft.items.is_empty() {
+                continue;
+            }
+            let mut items = draft.items;
+            items.reverse();
+            let mut layer = lottie::Layer::new(0, frames, items);
+            layer
+                .ks
+                .set_opacity(lottie::Rounder::new(3).num(draft.opacity * 100.0));
+            layers.push(layer);
+        }
+        // Обводка — под рисунком, над фоном; за холст и рамку фона не выходит.
+        if let Some((color, ready)) = &self.outline {
+            let region = match (ready, conv.silhouette.take()) {
+                (Some(board), _) => {
+                    let cellr = [dx, dy, dx + canvas, dy + canvas];
+                    clip::translate(&clip::intersect(board, &clip::rect(cellr)), -dx, -dy)
+                }
+                (None, Some(silhouette)) => self.outline_region(&silhouette, options),
+                (None, None) => Vec::new(),
+            };
+            if !region.is_empty() {
+                let beziers = clip::to_beziers(&region, &round);
+                layers.push(fill_layer(
+                    "outline",
+                    beziers,
+                    *color,
+                    lottie::FILL_RULE_NONZERO,
+                    frames,
+                ));
+            }
+        }
+        if single {
+            layers.extend(background_layers(&self.background, canvas, canvas, frames));
+        } else {
+            layers.extend(self.background_cell(cell, &round, frames));
+        }
+        let empty = layers.is_empty();
+        if empty {
+            layers.push(blank_layer(canvas, frames));
+        }
+        for (n, layer) in layers.iter_mut().enumerate() {
+            layer.ind = n as u32 + 1;
+        }
+
+        let animation = lottie::Animation {
+            v: "5.7.4",
+            fr: lottie::Num(options.effective_fps() as f64),
+            ip: lottie::Num(0.0),
+            op: lottie::Num(frames as f64),
+            w: canvas as u32,
+            h: canvas as u32,
+            nm: "svg2tgs",
+            ddd: 0,
+            assets: [],
+            layers,
+            tgs: 1,
+        };
+        let max_points = animation
+            .layers
+            .iter()
+            .flat_map(|l| &l.shapes)
+            .map(lottie::Shape::rlottie_points)
+            .max()
+            .unwrap_or(0);
+        let json = serde_json::to_vec(&animation)
+            .expect("сериализация Lottie не может завершиться ошибкой");
+        Built {
+            max_points,
+            tgs: gzip(&json),
+            json_bytes: json.len(),
+            warnings: conv.warnings,
+            thinnest_stroke: conv.thinnest_stroke,
+            empty,
+        }
+    }
+
+    /// Фон в клетке сетки: области фона всего холста, обрезанные по клетке.
+    fn background_cell(
+        &self,
+        (col, row): (u32, u32),
+        round: &lottie::Rounder,
+        frames: u32,
+    ) -> Vec<lottie::Layer> {
+        let (w, h) = self.size();
+        let t = self.tile;
+        let (dx, dy) = (col as f64 * t, row as f64 * t);
+        let cell = clip::rect([dx, dy, dx + t, dy + t]);
+        let plan = &self.background;
+        let piece = |region: clip::Contours| {
+            clip::to_beziers(
+                &clip::translate(&clip::intersect(&region, &cell), -dx, -dy),
+                round,
+            )
+        };
+        let mut out = Vec::new();
+        if let Some((rgb, bw)) = plan.border {
+            let outer = rounded_rect(0.0, 0.0, w, h, plan.radius);
+            let inner = rounded_rect(bw, bw, w - bw, h - bw, plan.radius - bw);
+            let ring = piece(clip::region(&[outer, inner], lottie::FILL_RULE_EVENODD));
+            if !ring.is_empty() {
+                out.push(fill_layer(
+                    "background-border",
+                    ring,
+                    rgb,
+                    lottie::FILL_RULE_NONZERO,
+                    frames,
+                ));
+            }
+        }
+        if let Some(rgb) = plan.fill {
+            let rect = piece(clip::flatten(&[rounded_rect(0.0, 0.0, w, h, plan.radius)]));
+            if !rect.is_empty() {
+                out.push(fill_layer(
+                    "background",
+                    rect,
+                    rgb,
+                    lottie::FILL_RULE_NONZERO,
+                    frames,
+                ));
+            }
+        }
+        out
+    }
+}
+
+/// Слой пустой клетки: невидимая точка, чтобы в файле был хоть один слой.
+fn blank_layer(canvas: f64, frames: u32) -> lottie::Layer {
+    let c = canvas / 2.0;
+    let mut layer = fill_layer(
+        "blank",
+        vec![rounded_rect(c, c, c + 1.0, c + 1.0, 0.0)],
+        [0, 0, 0],
+        lottie::FILL_RULE_NONZERO,
+        frames,
+    );
+    layer.ks.set_opacity(lottie::Num(0.0));
+    layer
 }
 
 /// Цвет фона из параметров: `None` — прозрачный.
@@ -378,9 +649,16 @@ fn parse_color(s: &str, what: &str) -> Result<[u8; 3], Error> {
     Ok([ch(0)?, ch(2)?, ch(4)?])
 }
 
-/// Параметры фона из настроек: цвета проверены, радиус и толщина ограничены.
+/// Параметры фона из настроек для одного канваса: цвета проверены,
+/// радиус и толщина ограничены.
 pub fn background_plan(options: &Options) -> Result<BackgroundPlan, Error> {
-    let half = options.effective_canvas_size() as f64 / 2.0;
+    let c = options.effective_canvas_size() as f64;
+    background_plan_for(options, c, c)
+}
+
+/// Параметры фона для холста `w × h` (сетка нарезки — фон на весь холст).
+pub fn background_plan_for(options: &Options, w: f64, h: f64) -> Result<BackgroundPlan, Error> {
+    let half = w.min(h) / 2.0;
     let border = match &options.background_border {
         Some(b) if b.width > 0.0 => Some((
             parse_color(&b.color, "рамки фона")?,
@@ -429,15 +707,14 @@ fn rounded_rect(x0: f64, y0: f64, x1: f64, y1: f64, r: f64) -> lottie::Bezier {
     }
 }
 
-/// Слои фона, сверху вниз: рамка, заливка.
-fn background_layers(plan: &BackgroundPlan, canvas: u32, frames: u32) -> Vec<lottie::Layer> {
-    let c = canvas as f64;
+/// Слои фона на канвас `w × h`, сверху вниз: рамка, заливка.
+fn background_layers(plan: &BackgroundPlan, w: f64, h: f64, frames: u32) -> Vec<lottie::Layer> {
     let mut out = Vec::new();
-    if let Some((rgb, w)) = plan.border {
+    if let Some((rgb, bw)) = plan.border {
         // Кольцо: внешний край — край фона, внутренний — отступ w внутрь
         // с радиусом r − w; правило evenodd вырезает середину.
-        let outer = rounded_rect(0.0, 0.0, c, c, plan.radius);
-        let inner = rounded_rect(w, w, c - w, c - w, plan.radius - w);
+        let outer = rounded_rect(0.0, 0.0, w, h, plan.radius);
+        let inner = rounded_rect(bw, bw, w - bw, h - bw, plan.radius - bw);
         out.push(fill_layer(
             "background-border",
             vec![outer, inner],
@@ -447,7 +724,7 @@ fn background_layers(plan: &BackgroundPlan, canvas: u32, frames: u32) -> Vec<lot
         ));
     }
     if let Some(rgb) = plan.fill {
-        let rect = rounded_rect(0.0, 0.0, c, c, plan.radius);
+        let rect = rounded_rect(0.0, 0.0, w, h, plan.radius);
         out.push(fill_layer(
             "background",
             vec![rect],

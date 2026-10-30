@@ -4,7 +4,11 @@ export type Preset = "sticker" | "emoji";
 export type Bounds = "container" | "content";
 export type Fit = "contain" | "cover" | "width" | "height" | "free";
 
-/** Обрезка краёв, доли стороны — `svg2tgs_core::Crop`. */
+/**
+ * Рамка обрезки — `svg2tgs_core::Crop`: отступы внутрь от рамки рисунка
+ * без поворота, доли её ширины и высоты (могут быть отрицательными).
+ * Рамка стоит относительно центра и при повороте не двигается.
+ */
 export interface Crop {
   top: number;
   right: number;
@@ -13,6 +17,12 @@ export interface Crop {
 }
 
 export type Background = { kind: "transparent" } | { kind: "solid"; color: string };
+
+/** Сетка нарезки на эмодзи — `svg2tgs_core::Grid`. */
+export interface Grid {
+  cols: number;
+  rows: number;
+}
 
 export type Optimization =
   | { mode: "auto" }
@@ -45,12 +55,19 @@ export interface Options {
   rotation?: number;
   /** Пропорции: ширина относительно высоты, 1 — без искажения. */
   aspect?: number;
-  crop?: Crop;
+  /** `null` — без обрезки. */
+  crop?: Crop | null;
   background: Background;
   /** Скругление углов фона, px канваса 512. */
   background_radius?: number;
   /** Рамка фона внутри канваса; `null` — без рамки. */
   background_border?: Outline | null;
+  /** Обрезать рисунок по скруглённой рамке фона. */
+  background_clip?: boolean;
+  /** Нарезка на эмодзи; `null` — один файл. */
+  grid?: Grid | null;
+  /** Сетка подбирается по пропорциям рисунка. */
+  grid_auto?: boolean;
   /** `null` — без обводки. */
   outline?: Outline | null;
   optimization: Optimization;
@@ -68,7 +85,10 @@ export interface Warning {
 /** Итог конвертации одного файла. */
 export interface Outcome {
   id: string;
+  /** Размер файла; при нарезке — самой большой клетки. */
   tgsBytes: number | null;
+  /** Сетка нарезки `[столбцы, строки]`, `[1, 1]` — один файл. */
+  grid: [number, number];
   warnings: Warning[];
   error: string | null;
 }
@@ -109,6 +129,8 @@ export interface Saved {
   id: string;
   status: "saved" | "skipped" | "failed";
   path: string | null;
+  /** Сколько файлов записано (клеток нарезки). */
+  count: number;
 }
 
 export const DEFAULT_OPTIONS: Options = {
@@ -123,10 +145,13 @@ export const DEFAULT_OPTIONS: Options = {
   flip_v: false,
   rotation: 0,
   aspect: 1,
-  crop: { top: 0, right: 0, bottom: 0, left: 0 },
+  crop: null,
   background: { kind: "transparent" },
   background_radius: 0,
   background_border: null,
+  background_clip: true,
+  grid: null,
+  grid_auto: true,
   outline: null,
   optimization: { mode: "auto" },
 };
@@ -140,11 +165,23 @@ export const DEFAULT_BORDER: Outline = { width: 12, color: "#3157d5" };
  *  автоматического перехода на «этого файла» при правке трансформации. */
 export const SECTION_KEYS = {
   position: ["bounds", "fit", "scale", "position_x", "position_y", "padding"],
-  transform: ["flip_h", "flip_v", "rotation", "aspect", "crop"],
+  transform: ["flip_h", "flip_v", "aspect", "rotation", "crop"],
   style: ["outline"],
-  background: ["background", "background_radius", "background_border"],
+  background: ["background", "background_radius", "background_border", "background_clip"],
   extra: ["optimization", "fps", "duration_secs"],
 } as const satisfies Record<string, readonly (keyof Options)[]>;
+
+/** Настройки нарезки (блок «Результат»). */
+export const GRID_KEYS = ["grid", "grid_auto"] as const satisfies readonly (keyof Options)[];
+
+/** Правка этих ключей при нескольких файлах уходит только в выбранные
+ *  файлы: трансформация и положение почти всегда свои у каждого рисунка. */
+export const OWN_KEYS = [...SECTION_KEYS.transform, "position_x", "position_y"] as const;
+
+/** Столбцов в автоматической сетке: столько эмодзи клиенты Telegram
+ *  показывают в ряд. Практика клиентов, не требование документации. */
+export const AUTO_GRID_COLS = 8;
+export const MAX_GRID = 20;
 
 export type SectionId = keyof typeof SECTION_KEYS;
 

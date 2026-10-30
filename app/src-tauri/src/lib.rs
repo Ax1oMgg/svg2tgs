@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use svg2tgs_core::{Options, Warning};
+use svg2tgs_core::{Grid, Options, Warning};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
@@ -19,7 +19,10 @@ use tauri_plugin_opener::OpenerExt;
 struct Item {
     svg: Vec<u8>,
     options: Options,
-    tgs: Option<Vec<u8>>,
+    /// Готовые TGS: один файл или клетки нарезки по строкам.
+    tiles: Vec<Vec<u8>>,
+    /// Столбцы и строки нарезки (1 × 1 — без нарезки).
+    grid: Grid,
 }
 
 #[derive(Default)]
@@ -76,7 +79,10 @@ enum Source {
 #[serde(rename_all = "camelCase")]
 struct Outcome {
     id: String,
+    /// Размер файла; при нарезке — самой большой клетки.
     tgs_bytes: Option<usize>,
+    /// Сетка нарезки `[столбцы, строки]`; `[1, 1]` — один файл.
+    grid: [u32; 2],
     warnings: Vec<Warning>,
     /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`.
     error: Option<String>,
@@ -102,18 +108,27 @@ async fn convert(
         let Ok(svg) = svg else {
             return (None, Outcome::failed(&id, "read_failed"));
         };
-        match svg2tgs_core::convert(&svg, &options) {
-            Ok(conv) => {
+        match svg2tgs_core::convert_grid(&svg, &options) {
+            Ok(out) => {
+                // Замечания клеток — без повторов.
+                let mut warnings: Vec<Warning> = Vec::new();
+                for w in out.tiles.iter().flat_map(|c| &c.warnings) {
+                    if !warnings.contains(w) {
+                        warnings.push(w.clone());
+                    }
+                }
                 let outcome = Outcome {
                     id: id.clone(),
-                    tgs_bytes: Some(conv.tgs_bytes()),
-                    warnings: conv.warnings,
+                    tgs_bytes: out.tiles.iter().map(|c| c.tgs_bytes()).max(),
+                    grid: [out.grid.cols, out.grid.rows],
+                    warnings,
                     error: None,
                 };
                 let item = Item {
                     svg,
                     options,
-                    tgs: Some(conv.tgs),
+                    tiles: out.tiles.into_iter().map(|c| c.tgs).collect(),
+                    grid: out.grid,
                 };
                 (Some(item), outcome)
             }
@@ -126,7 +141,8 @@ async fn convert(
                 let item = Item {
                     svg,
                     options,
-                    tgs: None,
+                    tiles: Vec::new(),
+                    grid: Grid { cols: 1, rows: 1 },
                 };
                 (Some(item), Outcome::failed(&id, code))
             }
@@ -150,6 +166,7 @@ impl Outcome {
         Self {
             id: id.to_string(),
             tgs_bytes: None,
+            grid: [1, 1],
             warnings: Vec::new(),
             error: Some(code.to_string()),
         }
@@ -160,15 +177,18 @@ impl Outcome {
 #[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 enum PreviewKind {
-    /// Исходный SVG (resvg) — в тех же координатах, что и результат.
+    /// Исходный SVG (resvg) — в тех же координатах, что и результат
+    /// (при нарезке — весь холст).
     Svg,
-    /// Готовый TGS глазами Telegram (rlottie).
+    /// Готовый TGS глазами Telegram (rlottie); при нарезке — клетки,
+    /// сложенные вплотную.
     Tgs,
     /// Исходный SVG без трансформации и размещения — для кадрирования.
     Source,
 }
 
 /// Картинка превью в виде data-URL PNG; `None`, если рисовать нечего.
+/// Длинная сторона картинки — `size`.
 #[tauri::command]
 async fn preview(
     id: String,
@@ -182,19 +202,33 @@ async fn preview(
     let size = size.clamp(16, 1024);
     tauri::async_runtime::spawn_blocking(move || {
         let image = match kind {
-            PreviewKind::Svg => svg2tgs_render::render_svg(&item.svg, size, &item.options).ok(),
+            PreviewKind::Svg => {
+                // Та же сетка, что у результата (и при подборе по пропорциям).
+                let options = Options {
+                    grid: (item.grid.cols * item.grid.rows > 1).then_some(item.grid),
+                    grid_auto: false,
+                    ..item.options.clone()
+                };
+                svg2tgs_render::render_svg(&item.svg, size, &options).ok()
+            }
             PreviewKind::Source => {
                 // Без трансформации, но с той же рамкой рисунка.
                 let plain = Options {
                     bounds: item.options.bounds,
+                    crop: None,
                     ..Options::default()
                 };
                 svg2tgs_render::render_svg(&item.svg, size, &plain).ok()
             }
-            PreviewKind::Tgs => item
-                .tgs
-                .as_ref()
-                .and_then(|t| svg2tgs_render::render_tgs(t, size, 0).ok()),
+            PreviewKind::Tgs => match item.tiles.len() {
+                0 => None,
+                1 => svg2tgs_render::render_tgs(&item.tiles[0], size, 0).ok(),
+                _ => {
+                    let side = item.grid.cols.max(item.grid.rows);
+                    let cell = (size / side).max(16);
+                    svg2tgs_render::render_tgs_grid(&item.tiles, item.grid.cols, cell).ok()
+                }
+            },
         };
         image.map(|img| {
             let png = base64::engine::general_purpose::STANDARD.encode(img.to_png());
@@ -225,8 +259,18 @@ fn forget(ids: Vec<String>, state: State<'_, AppState>) {
 
 /// Какие результаты лягут на уже существующие файлы.
 #[tauri::command]
-fn find_existing(requests: Vec<files::SaveRequest>) -> Vec<files::Existing> {
-    files::find_existing(&requests)
+fn find_existing(
+    requests: Vec<files::SaveRequest>,
+    state: State<'_, AppState>,
+) -> Vec<files::Existing> {
+    let counts: Vec<usize> = {
+        let map = state.items.lock().unwrap();
+        requests
+            .iter()
+            .map(|r| map.get(&r.id).map_or(1, |i| i.tiles.len().max(1)))
+            .collect()
+    };
+    files::find_existing(&requests, &counts)
 }
 
 /// Сохраняет готовые TGS: каждый — в свою папку (см. `files::SaveRequest`).
@@ -236,13 +280,13 @@ async fn save(
     conflict: files::Conflict,
     state: State<'_, AppState>,
 ) -> Result<Vec<files::Saved>, String> {
-    let items: Vec<(files::SaveRequest, Option<Vec<u8>>)> = {
+    let items: Vec<(files::SaveRequest, Vec<Vec<u8>>)> = {
         let map = state.items.lock().unwrap();
         requests
             .into_iter()
             .map(|r| {
-                let tgs = map.get(&r.id).and_then(|i| i.tgs.clone());
-                (r, tgs)
+                let tiles = map.get(&r.id).map(|i| i.tiles.clone()).unwrap_or_default();
+                (r, tiles)
             })
             .collect()
     };

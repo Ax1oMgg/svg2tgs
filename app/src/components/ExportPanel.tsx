@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
 import type { ExportPrefs, Toggle } from "../prefs";
 import {
+  AUTO_GRID_COLS,
   DEFAULT_BORDER,
   DEFAULT_OPTIONS,
   DEFAULT_OUTLINE,
+  GRID_KEYS,
+  MAX_GRID,
   MAX_RADIUS,
   SECTION_KEYS,
-  resetKeys,
   sameKeys,
   type Fit,
   type Options,
@@ -25,32 +27,73 @@ interface Props {
   /** Настройки, которые сейчас правятся: общие или выбранного файла. */
   options: Options;
   onOptions: (o: Options) => void;
+  /** Куда ведёт сброс: в «Всех файлов» — к умолчаниям, в своих
+   *  настройках файла — к общим настройкам. */
+  resetTo: Options;
   scope: Scope;
   onScope: (s: Scope) => void;
   /** Имя выбранного файла; `null` — файлов нет, «этого файла» недоступно. */
   selectedName: string | null;
+  /** Сколько файлов выбрано в списке. */
+  selectedCount: number;
+  /** Сетка, по которой нарезан выбранный файл (подобранная, если авто). */
+  actualGrid: [number, number] | null;
   exportPrefs: ExportPrefs;
   onExportPrefs: (e: ExportPrefs) => void;
   /** Какие разделы раскрыты. */
   sections: Partial<Record<SectionId, boolean>>;
   onSection: (id: SectionId, open: boolean) => void;
-  /** Сколько файлов готово к экспорту. */
-  readyCount: number;
+  /** Сколько файлов в списке. */
+  totalCount: number;
   exporting: boolean;
   onExport: () => void;
+  /** Экспорт только выбранного файла; `null` — его нечем экспортировать. */
+  onExportOne: (() => void) | null;
   onChooseDir: () => void;
   /** Открыть кадрирование мышью в превью. */
   onCrop: () => void;
 }
 
-const ALL_KEYS = Object.values(SECTION_KEYS).flat();
+const ALL_KEYS = [...Object.values(SECTION_KEYS).flat(), ...GRID_KEYS];
 
-/** Угол в пределах −180…180. */
-const normAngle = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
+/** Угол в пределах −180…180 (180 так и остаётся 180). */
+const normAngle = (a: number) => {
+  const n = ((((a + 180) % 360) + 360) % 360) - 180;
+  return n === -180 && a > 0 ? 180 : n;
+};
+
+/** Ближайший к углу кратный 90° — середина шкалы поворота. */
+const baseOf = (a: number) => Math.round(a / 90) * 90;
+
+/** Отступ хранится долей канваса, показывается в пикселях из 512. */
+const CANVAS = 512;
+
+/** Значок «файл со стрелкой вниз» (Lucide `file-down`, ISC). */
+function FileDownIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M12 18v-6" />
+      <path d="m9 15 3 3 3-3" />
+    </svg>
+  );
+}
+
+/** Значок «волшебная палочка» (Lucide `wand-sparkles`, ISC). */
+function WandIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
+      <path d="m14 7 3 3" />
+      <path d="M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9" />
+    </svg>
+  );
+}
 
 /**
  * Панель экспорта: куда и под каким именем сохранить, затем настройки
- * конвертации — общие для всех файлов или свои для выбранного. Порядок
+ * конвертации — общие для всех файлов или свои для выбранных. Порядок
  * обработки рисунка: трансформация → положение → оформление → фон.
  */
 export function ExportPanel(p: Props) {
@@ -58,6 +101,12 @@ export function ExportPanel(p: Props) {
   const { options, exportPrefs: ex } = p;
   const set = (patch: Partial<Options>) => p.onOptions({ ...options, ...patch });
   const setEx = (patch: Partial<ExportPrefs>) => p.onExportPrefs({ ...ex, ...patch });
+  /** Сброс ключей к `resetTo`. */
+  const reset = (keys: readonly (keyof Options)[]) => {
+    const out: Options = { ...options };
+    for (const k of keys) (out as unknown as Record<string, unknown>)[k] = p.resetTo[k] ?? DEFAULT_OPTIONS[k] ?? null;
+    p.onOptions(out);
+  };
   const [color, setColor] = useState(options.background.kind === "solid" ? options.background.color : "#ffffff");
   // Толщина и цвет обводок помнятся, пока обводка выключена.
   const [outline, setOutline] = useState<Outline>(options.outline ?? DEFAULT_OUTLINE);
@@ -77,9 +126,29 @@ export function ExportPanel(p: Props) {
     set({ background_border: next });
   };
 
-  const crop = options.crop ?? DEFAULT_OPTIONS.crop!;
-  const cropped = crop.top + crop.right + crop.bottom + crop.left > 0;
+  const cropped = !!options.crop;
   const rotation = options.rotation ?? 0;
+  // Шкала поворота — «середина ± 90°»; кнопки ±90° сдвигают и угол, и середину.
+  const [rotBase, setRotBase] = useState(() => baseOf(rotation));
+  useEffect(() => {
+    if (Math.abs(normAngle(rotation - rotBase)) > 90) setRotBase(baseOf(rotation));
+  }, [rotation, rotBase]);
+  const rotShown = rotBase + normAngle(rotation - rotBase);
+  const rotate90 = (dir: 1 | -1) => {
+    set({ rotation: normAngle(rotation + dir * 90) });
+    setRotBase(normAngle(rotBase + dir * 90));
+  };
+
+  const grid = options.grid ?? null;
+  const shownGrid: [number, number] =
+    options.grid_auto !== false && p.actualGrid && (p.actualGrid[0] > 1 || p.actualGrid[1] > 1)
+      ? p.actualGrid
+      : grid
+        ? [grid.cols, grid.rows]
+        : [AUTO_GRID_COLS, 1];
+  const tiles = shownGrid[0] * shownGrid[1];
+  const pad2 = (i: number) => String(i).padStart(Math.max(2, String(tiles).length), "0");
+  const base = (p.selectedName ?? "image").replace(/\.svg$/i, "");
 
   const section = (id: SectionId, title: string, children: React.ReactNode) => (
     <Section
@@ -87,8 +156,8 @@ export function ExportPanel(p: Props) {
       open={!!p.sections[id]}
       onToggle={(open) => p.onSection(id, open)}
       resetTitle={t.resetSection(title)}
-      isDefault={sameKeys(options, DEFAULT_OPTIONS, SECTION_KEYS[id])}
-      onReset={() => p.onOptions(resetKeys(options, SECTION_KEYS[id]))}
+      isDefault={sameKeys(options, p.resetTo, SECTION_KEYS[id])}
+      onReset={() => reset(SECTION_KEYS[id])}
     >
       {children}
     </Section>
@@ -105,21 +174,40 @@ export function ExportPanel(p: Props) {
     ["height", t.fitHeight, t.fitHeightHint],
     ["free", t.fitFree, t.fitFreeHint],
   ];
+  const many = p.selectedCount > 1;
+  const oneTitle = p.selectedName
+    ? options.grid
+      ? t.exportOneTiles(p.selectedName, tiles)
+      : t.exportOne(p.selectedName)
+    : t.exportOne("…");
 
   return (
     <aside className="export" aria-label={t.exportPanel}>
-      {/* Шапка как у «Файлов»: не прокручивается. */}
+      {/* Шапка как у «Файлов»: не прокручивается. «Экспортировать» — весь
+          список; значок рядом — только выбранный файл. */}
       <div className="export__head">
         <h2 className="panel-title">{t.exportPanel}</h2>
-        <button
-          type="button"
-          className="btn btn--primary btn--wide"
-          title={t.exportHint}
-          disabled={p.readyCount === 0 || p.exporting}
-          onClick={p.onExport}
-        >
-          {t.export}
-        </button>
+        <div className="export__actions">
+          <button
+            type="button"
+            className="btn btn--primary btn--wide"
+            title={t.exportHint}
+            disabled={p.totalCount === 0 || p.exporting}
+            onClick={p.onExport}
+          >
+            {p.totalCount > 0 ? t.exportN(p.totalCount) : t.export}
+          </button>
+          <button
+            type="button"
+            className="btn btn--default btn--icon export__one"
+            title={oneTitle}
+            aria-label={oneTitle}
+            disabled={!p.onExportOne || p.exporting}
+            onClick={() => p.onExportOne?.()}
+          >
+            <FileDownIcon />
+          </button>
+        </div>
       </div>
       <div className="export__body scroll scroll--16">
 
@@ -176,28 +264,85 @@ export function ExportPanel(p: Props) {
           <span>{t.exportSettings}</span>
           <ResetButton
             title={t.resetAll}
-            disabled={sameKeys(options, DEFAULT_OPTIONS, [...ALL_KEYS, "preset", "optimization"])}
-            onClick={() => p.onOptions({ ...DEFAULT_OPTIONS })}
+            disabled={sameKeys(options, p.resetTo, [...ALL_KEYS, "optimization"])}
+            onClick={() => reset(ALL_KEYS)}
           />
         </div>
         <div className="segmented segmented--wide" role="radiogroup" aria-label={t.exportSettings}>
           <SegButton active={p.scope === "all"} title={t.scopeAllHint} onClick={() => p.onScope("all")}>
             {t.scopeAll}
           </SegButton>
-          <SegButton active={p.scope === "one"} title={t.scopeOneHint2} onClick={() => p.selectedName && p.onScope("one")}>
-            {t.scopeOne}
+          <SegButton
+            active={p.scope === "one"}
+            title={many ? t.scopeSelectedHint(p.selectedCount) : t.scopeOneHint2}
+            onClick={() => p.selectedName && p.onScope("one")}
+          >
+            {many ? t.scopeSelected : t.scopeOne}
           </SegButton>
         </div>
-        {p.scope === "one" && p.selectedName && <p className="hint">{t.scopeOneHint(p.selectedName)}</p>}
+        {p.scope === "one" && p.selectedName && (
+          <p className="hint">{many ? t.scopeSelectedHint(p.selectedCount) : t.scopeOneHint(p.selectedName)}</p>
+        )}
       </div>
 
-      <div className="segmented segmented--wide" role="radiogroup" aria-label={t.preset}>
-        <SegButton active={options.preset === "sticker"} title={t.stickerHint} onClick={() => set({ preset: "sticker" })}>
-          {t.sticker}
-        </SegButton>
-        <SegButton active={options.preset === "emoji"} title={t.emojiHint} onClick={() => set({ preset: "emoji" })}>
-          {t.emoji}
-        </SegButton>
+      {/* Результат: один файл или нарезка на эмодзи. Сетка по умолчанию
+          подбирается по пропорциям рисунка, до 8 в ряд; числа можно
+          поменять, палочка возвращает подбор. */}
+      <div className="field">
+        <div className="field__label">{t.resultKind}</div>
+        <div className="segmented segmented--wide" role="radiogroup" aria-label={t.resultKind}>
+          <SegButton active={!grid} title={t.singleHint} onClick={() => set({ grid: null })}>
+            {t.single}
+          </SegButton>
+          <SegButton
+            active={!!grid}
+            title={t.sliceHint}
+            onClick={() => !grid && set({ grid: { cols: shownGrid[0], rows: shownGrid[1] }, grid_auto: true })}
+          >
+            {t.slice}
+          </SegButton>
+        </div>
+        {grid && (
+          <>
+            <div className="opt-row grid-row">
+              <label className="grid-row__field">
+                {t.cols}
+                <NumField
+                  value={shownGrid[0]}
+                  min={1}
+                  max={MAX_GRID}
+                  coarse={2}
+                  label={t.cols}
+                  onChange={(v) => set({ grid: { cols: Math.round(v), rows: shownGrid[1] }, grid_auto: false })}
+                />
+              </label>
+              <span aria-hidden="true">×</span>
+              <label className="grid-row__field">
+                {t.rows}
+                <NumField
+                  value={shownGrid[1]}
+                  min={1}
+                  max={MAX_GRID}
+                  coarse={2}
+                  label={t.rows}
+                  onChange={(v) => set({ grid: { cols: shownGrid[0], rows: Math.round(v) }, grid_auto: false })}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn--text btn--icon opt-row__end"
+                title={t.autoGrid}
+                aria-label={t.autoGrid}
+                disabled={options.grid_auto !== false}
+                onClick={() => set({ grid_auto: true })}
+              >
+                <WandIcon />
+              </button>
+            </div>
+            <p className="hint">{t.sliceInfo(tiles, `${base}_${pad2(1)}`, `${base}_${pad2(tiles)}`)}</p>
+            {shownGrid[0] > AUTO_GRID_COLS && <p className="note note--warn">{t.sliceWide}</p>}
+          </>
+        )}
       </div>
 
       {section(
@@ -240,6 +385,7 @@ export function ExportPanel(p: Props) {
               unit="%"
               min={10}
               max={400}
+              coarse={10}
               value={Math.round((options.scale ?? 1) * 100)}
               onChange={(v) => set({ scale: v / 100 })}
             />
@@ -249,6 +395,7 @@ export function ExportPanel(p: Props) {
             label={t.positionX}
             unit="%"
             max={100}
+            coarse={5}
             value={Math.round((options.position_x ?? 0.5) * 1000) / 10}
             decimals={1}
             onChange={(v) => set({ position_x: v / 100 })}
@@ -258,6 +405,7 @@ export function ExportPanel(p: Props) {
             label={t.positionY}
             unit="%"
             max={100}
+            coarse={5}
             value={Math.round((options.position_y ?? 0.5) * 1000) / 10}
             decimals={1}
             onChange={(v) => set({ position_y: v / 100 })}
@@ -265,11 +413,12 @@ export function ExportPanel(p: Props) {
           <SliderField
             id="padding"
             label={t.padding}
-            unit="%"
-            max={20}
-            value={Math.round(options.padding * 1000) / 10}
+            unit="px"
+            max={100}
+            coarse={4}
+            value={Math.round(options.padding * CANVAS * 10) / 10}
             decimals={1}
-            onChange={(v) => set({ padding: v / 100 })}
+            onChange={(v) => set({ padding: v / CANVAS })}
           />
           <p className="hint hint--xs">{t.precisionHint}</p>
         </>,
@@ -279,6 +428,7 @@ export function ExportPanel(p: Props) {
         "transform",
         t.transform,
         <>
+          {/* Порядок — как в ядре: отразить → пропорции → повернуть → обрезать. */}
           <div className="opt-row">
             <span className="opt-row__label opt-row__label--short">{t.flip}</span>
             <IconToggle pressed={!!options.flip_h} title={t.flipH} onClick={() => set({ flip_h: !options.flip_h })}>
@@ -292,15 +442,25 @@ export function ExportPanel(p: Props) {
               <path d="m7 21 5-5 5 5H7" />
             </IconToggle>
           </div>
+          <SliderField
+            id="aspect"
+            label={t.aspect}
+            unit="%"
+            min={50}
+            max={200}
+            coarse={10}
+            value={Math.round((options.aspect ?? 1) * 100)}
+            onChange={(v) => set({ aspect: v / 100 })}
+          />
           <div className="field field--slider">
             <div className="opt-row">
               <span className="opt-row__label opt-row__label--short">{t.rotate}</span>
-              <IconToggle title={t.rotateLeft} onClick={() => set({ rotation: normAngle(rotation - 90) })}>
+              <IconToggle title={t.rotateLeft} onClick={() => rotate90(-1)}>
                 <path d="M20 9V7a2 2 0 0 0-2-2h-6" />
                 <path d="m15 2-3 3 3 3" />
                 <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
               </IconToggle>
-              <IconToggle title={t.rotateRight} onClick={() => set({ rotation: normAngle(rotation + 90) })}>
+              <IconToggle title={t.rotateRight} onClick={() => rotate90(1)}>
                 <path d="M12 5H6a2 2 0 0 0-2 2v3" />
                 <path d="m9 8 3-3-3-3" />
                 <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
@@ -312,20 +472,27 @@ export function ExportPanel(p: Props) {
                   max={180}
                   decimals={1}
                   width={52}
+                  coarse={15}
                   label={t.rotationAngle}
-                  onChange={(v) => set({ rotation: v })}
+                  onChange={(v) => set({ rotation: normAngle(v) })}
                 />
                 °
               </span>
             </div>
-            {/* Ползунок −90…+90°, ноль посередине; угол больше 90° — бегунок у края. */}
+            {/* Шкала «середина ± 90°» с подписями; середина — ближайший кратный 90°. */}
+            <div className="range-scale" aria-hidden="true">
+              <span>{normAngle(rotBase - 90)}°</span>
+              <span>{normAngle(rotBase)}°</span>
+              <span>{normAngle(rotBase + 90)}°</span>
+            </div>
             <Range
-              value={Math.max(-90, Math.min(90, rotation))}
-              min={-90}
-              max={90}
+              value={rotShown}
+              min={rotBase - 90}
+              max={rotBase + 90}
               center
+              coarse={15}
               label={t.rotationAngle}
-              onChange={(v) => set({ rotation: v })}
+              onChange={(v) => set({ rotation: normAngle(v) })}
             />
           </div>
           <div className="opt-row">
@@ -337,23 +504,8 @@ export function ExportPanel(p: Props) {
               </svg>
               {t.cropOpen}
             </button>
-            {cropped && (
-              <ResetButton
-                title={t.cropReset}
-                disabled={false}
-                onClick={() => set({ crop: { top: 0, right: 0, bottom: 0, left: 0 } })}
-              />
-            )}
+            {cropped && <ResetButton title={t.cropReset} disabled={false} onClick={() => set({ crop: null })} />}
           </div>
-          <SliderField
-            id="aspect"
-            label={t.aspect}
-            unit="%"
-            min={50}
-            max={200}
-            value={Math.round((options.aspect ?? 1) * 100)}
-            onChange={(v) => set({ aspect: v / 100 })}
-          />
         </>,
       )}
 
@@ -361,6 +513,7 @@ export function ExportPanel(p: Props) {
         "style",
         t.styleSection,
         <ColorRow
+          slider
           label={t.outline}
           on={outlineOn}
           onToggle={() => set({ outline: outlineOn ? null : shownOutline })}
@@ -382,6 +535,7 @@ export function ExportPanel(p: Props) {
             label={t.radius}
             unit="px"
             max={MAX_RADIUS}
+            coarse={8}
             value={Math.round(options.background_radius ?? 0)}
             onChange={(v) => set({ background_radius: Math.round(v) })}
           />
@@ -401,6 +555,7 @@ export function ExportPanel(p: Props) {
             colorLabel={t.fillColor}
           />
           <ColorRow
+            slider
             label={t.outline}
             on={borderOn}
             onToggle={() => set({ background_border: borderOn ? null : shownBorder })}
@@ -411,74 +566,51 @@ export function ExportPanel(p: Props) {
             widthLabel={t.borderWidth}
             colorLabel={t.borderColor}
           />
+          <label className="check" title={t.bgClipHint}>
+            <input
+              type="checkbox"
+              checked={options.background_clip !== false}
+              onChange={() => set({ background_clip: options.background_clip === false })}
+            />
+            {t.bgClip}
+          </label>
         </>,
       )}
 
       {section(
         "extra",
         t.advanced,
-        <>
-          <div className="field">
-            <div className="field__label">{t.optimization}</div>
-            <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
-              {(["auto", "lossless", "manual"] as const).map((mode) => (
-                <SegButton
-                  key={mode}
-                  active={options.optimization.mode === mode}
-                  title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
-                  onClick={() =>
-                    set({
-                      optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
-                    })
-                  }
-                >
-                  {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
-                </SegButton>
-              ))}
-            </div>
-            {options.optimization.mode === "manual" && (
-              <label className="sub">
-                {t.decimals}
-                <NumField
-                  value={options.optimization.precision}
-                  min={0}
-                  max={6}
-                  label={t.decimals}
-                  onChange={(v) => set({ optimization: { mode: "manual", precision: Math.round(v) } })}
-                />
-              </label>
-            )}
+        <div className="field">
+          <div className="field__label">{t.optimization}</div>
+          <div className="segmented segmented--wide" role="radiogroup" aria-label={t.optimization}>
+            {(["auto", "lossless", "manual"] as const).map((mode) => (
+              <SegButton
+                key={mode}
+                active={options.optimization.mode === mode}
+                title={mode === "auto" ? t.optAutoHint : mode === "lossless" ? t.optLosslessHint : t.optManualHint}
+                onClick={() =>
+                  set({
+                    optimization: mode === "manual" ? { mode, precision: 2 } : ({ mode } as Options["optimization"]),
+                  })
+                }
+              >
+                {mode === "auto" ? t.optAuto : mode === "lossless" ? t.optLossless : t.optManual}
+              </SegButton>
+            ))}
           </div>
-          <div className="field">
-            <label className="field__label" htmlFor="fps">
-              {t.fps}
+          {options.optimization.mode === "manual" && (
+            <label className="sub">
+              {t.decimals}
+              <NumField
+                value={options.optimization.precision}
+                min={0}
+                max={6}
+                label={t.decimals}
+                onChange={(v) => set({ optimization: { mode: "manual", precision: Math.round(v) } })}
+              />
             </label>
-            <input
-              id="fps"
-              type="number"
-              min={1}
-              max={120}
-              placeholder={`60 — ${t.telegramDefault}`}
-              value={options.fps ?? ""}
-              onChange={(e) => set({ fps: e.target.value ? Number(e.target.value) : null })}
-            />
-          </div>
-          <div className="field">
-            <label className="field__label" htmlFor="duration">
-              {t.duration}
-            </label>
-            <input
-              id="duration"
-              type="number"
-              min={0.1}
-              max={10}
-              step={0.1}
-              placeholder="1"
-              value={options.duration_secs ?? ""}
-              onChange={(e) => set({ duration_secs: e.target.value ? Number(e.target.value) : null })}
-            />
-          </div>
-        </>,
+          )}
+        </div>,
       )}
       </div>
     </aside>

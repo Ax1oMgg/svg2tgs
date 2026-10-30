@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.4", coreVersion: "0.1.4", runtime: "browser" };
+    return { version: "0.1.5", coreVersion: "0.1.5", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -76,9 +76,11 @@ export async function save(requests: SaveRequest[]): Promise<Saved[]> {
   if (isTauri()) return invoke<Saved[]>("save", { requests, conflict: "number" });
   return requests.map((r) => {
     const dir = r.dir ?? (r.source ? r.source.replace(/[\\/][^\\/]*$/, "") : null);
-    if (!dir) return { id: r.id, status: "failed", path: null };
+    if (!dir) return { id: r.id, status: "failed", path: null, count: 0 };
     const sub = r.subfolder ? `/${r.subfolder}` : "";
-    return { id: r.id, status: "saved", path: `${dir}${sub}/${r.name}.tgs` };
+    const n = mock.grids.get(r.id) ?? 1;
+    const name = n > 1 ? `${r.name}_01` : r.name;
+    return { id: r.id, status: "saved", path: `${dir}${sub}/${name}.tgs`, count: n };
   });
 }
 
@@ -156,6 +158,8 @@ const SAMPLE_SVGS: Record<string, string> = {
 
 const mock = {
   svgs: new Map<string, string>(),
+  /** Сколько клеток нарезки у файла. */
+  grids: new Map<string, number>(),
 
   async convert(id: string, source: Source, options: Options): Promise<Outcome> {
     await new Promise((r) => setTimeout(r, 150 + Math.random() * 250));
@@ -164,16 +168,26 @@ const mock = {
         ? source.text
         : SAMPLE_SVGS[source.path.split("/").pop() ?? ""] ?? SAMPLE_SVGS["star.svg"];
     if (!text.includes("<svg")) {
-      return { id, tgsBytes: null, warnings: [], error: "invalid_svg" };
+      return { id, tgsBytes: null, grid: [1, 1], warnings: [], error: "invalid_svg" };
     }
     mock.svgs.set(id, text);
+    // Нарезка: авто — по пропорциям viewBox, до 8 в ряд (как в ядре).
+    let grid: [number, number] = [1, 1];
+    if (options.grid) {
+      grid = [options.grid.cols, options.grid.rows];
+      if (options.grid_auto !== false) {
+        const vb = text.match(/viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/);
+        grid = autoGrid(vb ? Number(vb[1]) / Number(vb[2]) : 1);
+      }
+    }
+    mock.grids.set(id, grid[0] * grid[1]);
     const warnings =
       source.kind === "path" && source.path.endsWith("shadow.svg")
         ? [{ code: "filter_removed", filter: "drop_shadow", element_id: "shadow" }]
         : options.preset === "emoji" && text.includes("stroke-width")
           ? [{ code: "thin_lines_for_emoji", width: 8.5, recommended: 12 }]
           : [];
-    return { id, tgsBytes: 300 + text.length * 2, warnings, error: null };
+    return { id, tgsBytes: 300 + text.length * 2, grid, warnings, error: null };
   },
 
   async preview(id: string): Promise<string | null> {
@@ -181,6 +195,17 @@ const mock = {
     return svg ? `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` : null;
   },
 };
+
+/** Сетка по пропорциям (как `Grid::auto` в ядре). */
+function autoGrid(aspect: number): [number, number] {
+  let best: [number, number, number] = [1, 1, Infinity];
+  for (let c = 1; c <= 8; c++) {
+    const r = Math.min(20, Math.max(1, Math.round(c / aspect)));
+    const err = Math.abs(Math.log(c / r / aspect));
+    if (err < best[2] - 1e-9 || (Math.abs(err - best[2]) <= 1e-9 && c > best[0])) best = [c, r, err];
+  }
+  return [best[0], best[1]];
+}
 
 /** Файлы для демонстрации в браузерном режиме. */
 export const SAMPLE_PATHS = Object.keys(SAMPLE_SVGS).map((n) => `/demo/${n}`);

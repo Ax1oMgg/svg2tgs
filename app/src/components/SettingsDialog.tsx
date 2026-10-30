@@ -5,6 +5,7 @@ import { strings } from "../i18n";
 import { Dropdown } from "./Dropdown";
 import { SegButton } from "./Preview";
 import type { Theme } from "../prefs";
+import appIcon from "../../app-icon.svg";
 
 interface Props {
   lang: Lang;
@@ -88,11 +89,19 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
 
       <section className="about" aria-label={t.about}>
         <h3>{t.about}</h3>
+        {/* Шапка: иконка слева, название с версией и канал справа. */}
+        <div className="about__head">
+          <img className="about__icon" src={appIcon} alt="" width={52} height={52} />
+          <div className="about__title">
+            <span className="about__name">
+              svg2tgs <span className="about__version">v{version || "—"}</span>
+            </span>
+            <span>
+              {t.aboutChannel} <ExtLink link="telegram">{t.aboutChannelLink}</ExtLink>
+            </span>
+          </div>
+        </div>
         <p>
-          <span className="about__name">{t.aboutVersion(version || "—")}</span>
-          <br />
-          {t.aboutChannel} <ExtLink link="telegram">{t.aboutChannelLink}</ExtLink>
-          <br />
           {t.aboutAuthorFull}
           <br />
           {t.aboutLicenseShort}

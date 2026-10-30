@@ -1690,3 +1690,165 @@ details[open] > .sec .sec__chev {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
 }
+
+
+/* 0.1.5 ----------------------------------------------------------------- */
+
+/* «Экспортировать» (весь список) и значок «только этот файл» рядом. */
+.export__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.export__actions .btn--wide {
+  flex: 1;
+  min-width: 0;
+}
+
+.export__one {
+  flex: none;
+  width: 36px;
+  justify-content: center;
+}
+
+/* Подписи шкалы поворота: −90 · середина · +90. */
+.range-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: calc(-1 * var(--space-1));
+}
+
+/* Сетка нарезки: «Столбцы [8] × Строки [5]  палочка». */
+.grid-row {
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.grid-row__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.grid-row .btn--icon {
+  width: 28px;
+  height: 28px;
+}
+
+/* Главный из выбранных файлов — с полоской слева. */
+.file--current {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+/* «О программе»: иконка слева, название и канал справа. */
+.about__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.about__icon {
+  display: block;
+  flex: none;
+  width: 52px;
+  height: 52px;
+}
+
+.about__title {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space-1) / 2);
+  line-height: 1.4;
+}
+
+.about__title .about__name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+}
+
+.about__version {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+/* Нарезка в чате: сообщение из эмодзи вплотную. */
+.bubble--mosaic {
+  max-width: none;
+  padding: var(--space-2) var(--space-3);
+  line-height: 0;
+}
+
+.bubble--mosaic img {
+  display: block;
+  image-rendering: auto;
+}
+
+/* Реакция: плашка внизу пузыря — эмодзи и число. */
+.bubble--with-reaction {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.reaction {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: calc(var(--space-1) / 2) var(--space-2) calc(var(--space-1) / 2) var(--space-1);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.chat--light .reaction {
+  background: var(--color-reaction-light);
+}
+
+.chat--dark .reaction {
+  background: var(--color-reaction-dark);
+}
+
+.reaction img {
+  width: 20px;
+  height: 20px;
+}
+
+/* «Крупно» при нарезке: исходник с сеткой разрезов и номерами клеток. */
+.slice-src {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+}
+
+.closeup__frame .slice-src img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+}
+
+.slice-src__grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+}
+
+.slice-src__grid span {
+  box-shadow: inset 0 0 0 0.5px var(--color-accent);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  padding: calc(var(--space-1) / 2);
+  color: var(--color-accent);
+}
+
+/* Результат нарезки — по сторонам сетки, а не квадратом. */
+.closeup__frame img.closeup__mosaic {
+  aspect-ratio: auto;
+  height: auto;
+}

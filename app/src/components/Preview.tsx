@@ -2,14 +2,19 @@ import { useEffect, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { errorText, isInfo, strings, warningText } from "../i18n";
-import type { PreviewBg, PreviewMode } from "../prefs";
-import type { FileItem, Preset } from "../types";
+import type { PreviewBg, PreviewKind, PreviewMode } from "../prefs";
+import type { FileItem } from "../types";
+import { EMOJI_ONLY } from "../useFiles";
 import { formatSize } from "./FileList";
 
 interface Props {
   lang: Lang;
   item: FileItem | null;
-  preset: Preset;
+  /** Стикер или эмодзи — только вид, файл не пересобирается. */
+  kind: PreviewKind;
+  onKind: (k: PreviewKind) => void;
+  /** Настройки меняют рисунок: тогда слева — «Модифицированный SVG». */
+  modified: boolean;
   mode: PreviewMode;
   bg: PreviewBg;
   onMode: (m: PreviewMode) => void;
@@ -22,17 +27,19 @@ const SIZE = 512;
 
 /**
  * Сцена превью. «Как в чате» — стикер в диалоге Telegram (эмодзи — в строке
- * текста и крупным сообщением). «Крупно» — исходник и результат рядом.
- * Результат рисуется rlottie — тем же движком, что в Telegram.
+ * текста, крупным сообщением и реакцией; нарезка — сообщением из эмодзи).
+ * «Крупно» — исходник и результат рядом. Результат рисуется rlottie — тем же
+ * движком, что в Telegram.
  */
-export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor }: Props) {
+export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, onBg, cropEditor }: Props) {
   const t = strings[lang];
   const [images, setImages] = useState<{ svg: string | null; tgs: string | null }>({
     svg: null,
     tgs: null,
   });
 
-  const key = item ? `${item.id}:${item.status}:${item.outcome?.tgsBytes}` : "";
+  // Перерисовка — когда меняется результат (статус, размер, сетка нарезки).
+  const key = item ? `${item.id}:${item.status}:${item.outcome?.tgsBytes}:${item.outcome?.grid?.join("x")}` : "";
   useEffect(() => {
     let cancelled = false;
     setImages({ svg: null, tgs: null });
@@ -51,6 +58,10 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor
   }, [key]);
 
   const chatBg = bg === "dark" ? "dark" : "light";
+  const grid = item?.outcome?.grid ?? [1, 1];
+  const sliced = grid[0] * grid[1] > 1;
+  // Проверка тонких линий — только в виде «Эмодзи».
+  const warnings = (item?.outcome?.warnings ?? []).filter((w) => kind === "emoji" || w.code !== EMOJI_ONLY);
 
   return (
     <main className="stage">
@@ -61,6 +72,14 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor
           </SegButton>
           <SegButton active={mode === "closeup"} onClick={() => onMode("closeup")}>
             {t.closeUp}
+          </SegButton>
+        </div>
+        <div className="segmented" role="radiogroup" aria-label={t.viewKind}>
+          <SegButton active={kind === "sticker"} title={t.viewStickerHint} onClick={() => onKind("sticker")}>
+            {t.sticker}
+          </SegButton>
+          <SegButton active={kind === "emoji"} title={t.viewEmojiHint} onClick={() => onKind("emoji")}>
+            {t.emoji}
           </SegButton>
         </div>
         <div className="segmented" role="radiogroup" aria-label={t.background}>
@@ -94,19 +113,35 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor
           </div>
         )}
         {!cropEditor && item && item.status !== "error" && mode === "chat" && (
-          <Chat lang={lang} preset={preset} theme={chatBg} image={images.tgs} />
+          <Chat lang={lang} kind={kind} theme={chatBg} image={images.tgs} grid={sliced ? grid : null} />
         )}
         {!cropEditor && item && item.status !== "error" && mode === "closeup" && (
           <div className="closeup">
             <figure className={`closeup__frame bg-${bg}`}>
-              {images.svg ? <img src={images.svg} alt={t.original} /> : <Spinner />}
-              <figcaption>{t.original}</figcaption>
+              {images.svg ? (
+                sliced ? (
+                  <GridOverlay grid={grid} image={images.svg} />
+                ) : (
+                  <img src={images.svg} alt={modified ? t.originalModified : t.original} />
+                )
+              ) : (
+                <Spinner />
+              )}
+              <figcaption>
+                {sliced ? t.sliceSource(grid[0], grid[1]) : modified ? t.originalModified : t.original}
+              </figcaption>
             </figure>
             <figure className={`closeup__frame bg-${bg}`}>
-              {images.tgs ? <img src={images.tgs} alt={t.result} /> : <Spinner />}
+              {images.tgs ? (
+                <img className={sliced ? "closeup__mosaic" : undefined} src={images.tgs} alt={t.result} />
+              ) : (
+                <Spinner />
+              )}
               <figcaption>
-                {t.result}
-                {item.outcome?.tgsBytes != null && ` · ${formatSize(item.outcome.tgsBytes, lang)}`}
+                {sliced
+                  ? t.sliceResult(grid[0] * grid[1], formatSize(item.outcome?.tgsBytes ?? 0, lang))
+                  : t.result}
+                {!sliced && item.outcome?.tgsBytes != null && ` · ${formatSize(item.outcome.tgsBytes, lang)}`}
               </figcaption>
             </figure>
           </div>
@@ -115,11 +150,11 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor
 
       {item && item.outcome && !item.outcome.error && (
         <section className="notes" aria-live="polite">
-          {item.outcome.warnings.length === 0 ? (
+          {warnings.length === 0 ? (
             <p className="notes__ok">{t.allGood}</p>
           ) : (
             <ul className="notes__list">
-              {item.outcome.warnings.map((w, i) => (
+              {warnings.map((w, i) => (
                 <li key={i} className={isInfo(w) ? "note note--info" : "note note--warn"}>
                   {warningText(w, lang)}
                 </li>
@@ -132,17 +167,42 @@ export function Preview({ lang, item, preset, mode, bg, onMode, onBg, cropEditor
   );
 }
 
-/** Диалог Telegram: стикер без пузыря; эмодзи — в тексте и крупно. */
+/** Исходник при нарезке: сетка разрезов и номера клеток (номер = номер файла). */
+function GridOverlay({ grid, image }: { grid: [number, number]; image: string }) {
+  const [cols, rows] = grid;
+  return (
+    <div className="slice-src" style={{ aspectRatio: `${cols} / ${rows}` }}>
+      <img src={image} alt="" />
+      <div
+        className="slice-src__grid"
+        style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}
+        aria-hidden="true"
+      >
+        {Array.from({ length: cols * rows }, (_, i) => (
+          <span key={i}>{i + 1}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Сторона эмодзи в сообщении из нарезки, px. */
+const SLICE_CHAT_CELL = 26;
+
+/** Диалог Telegram: стикер без пузыря; эмодзи — в тексте, крупно и реакцией;
+ *  нарезка — сообщение из эмодзи вплотную, по строке сетки на строку. */
 function Chat({
   lang,
-  preset,
+  kind,
   theme,
   image,
+  grid,
 }: {
   lang: Lang;
-  preset: Preset;
+  kind: PreviewKind;
   theme: "light" | "dark";
   image: string | null;
+  grid: [number, number] | null;
 }) {
   const t = strings[lang];
   return (
@@ -150,7 +210,17 @@ function Chat({
       <div className="chat__row chat__row--in">
         <div className="bubble bubble--in">{t.chatMessage}</div>
       </div>
-      {preset === "sticker" ? (
+      {grid ? (
+        <div className="chat__row chat__row--out">
+          <div className="bubble bubble--out bubble--mosaic">
+            {image ? (
+              <img src={image} alt={t.result} style={{ width: grid[0] * SLICE_CHAT_CELL, height: grid[1] * SLICE_CHAT_CELL }} />
+            ) : (
+              <Spinner />
+            )}
+          </div>
+        </div>
+      ) : kind === "sticker" ? (
         <div className="chat__row chat__row--out">
           <div className="chat__sticker">{image ? <img src={image} alt={t.result} /> : <Spinner />}</div>
         </div>
@@ -164,6 +234,15 @@ function Chat({
           </div>
           <div className="chat__row chat__row--out">
             <div className="chat__emoji-big">{image ? <img src={image} alt={t.result} /> : <Spinner />}</div>
+          </div>
+          {/* Реакция: собеседник поставил наш эмодзи на сообщение. */}
+          <div className="chat__row chat__row--out">
+            <div className="bubble bubble--out bubble--with-reaction">
+              <span>{t.reactionMessage}</span>
+              <span className="reaction" title={t.reactionHint}>
+                {image ? <img src={image} alt="" /> : null}1
+              </span>
+            </div>
           </div>
         </>
       )}

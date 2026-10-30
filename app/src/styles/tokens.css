@@ -49,6 +49,9 @@
   --color-bubble-out-dark: #2b5278;
   --color-bubble-text-light: #17202b;
   --color-bubble-text-dark: #e9eef4;
+  /* Плашка реакции под сообщением. */
+  --color-reaction-light: rgb(78 160 60 / 0.18);
+  --color-reaction-dark: rgb(255 255 255 / 0.14);
 
   /* Шахматка прозрачности */
   --color-checker-a: #ffffff;
@@ -84,7 +87,7 @@
 
   /* Размеры колонок */
   --width-files: 358px;
-  --width-settings: 280px;
+  --width-settings: 310px;
   --height-topbar: 52px;
 
   --shadow-dialog: 0 18px 50px rgb(16 24 40 / 0.22);

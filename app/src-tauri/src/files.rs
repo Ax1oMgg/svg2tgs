@@ -107,7 +107,10 @@ pub struct Saved {
     pub id: String,
     /// `saved`, `skipped` или `failed`.
     pub status: &'static str,
+    /// Путь файла (при нарезке — первой клетки).
     pub path: Option<String>,
+    /// Сколько файлов записано (клеток нарезки).
+    pub count: usize,
 }
 
 /// Имя файла без запрещённых в Windows и macOS символов.
@@ -128,11 +131,29 @@ fn safe_name(name: &str) -> String {
     }
 }
 
-/// Первое свободное имя `base_1`, `base_2`… в папке `dir` (без расширения).
-pub fn free_name(dir: &Path, base: &str) -> String {
+/// Имена файлов результата без расширения: `base` или, при нарезке на
+/// `n` клеток, `base_01`, `base_02`… (номер с нулями до общей длины).
+pub fn tile_names(base: &str, n: usize) -> Vec<String> {
+    if n <= 1 {
+        return vec![base.to_string()];
+    }
+    let digits = n.to_string().len().max(2);
+    (1..=n).map(|i| format!("{base}_{i:0digits$}")).collect()
+}
+
+/// Есть ли в папке хоть один из файлов результата.
+fn taken(dir: &Path, base: &str, n: usize) -> bool {
+    tile_names(base, n)
+        .iter()
+        .any(|name| dir.join(format!("{name}.tgs")).exists())
+}
+
+/// Первое свободное имя `base_1`, `base_2`… в папке `dir` (без расширения):
+/// при нарезке свободны должны быть все `n` файлов.
+pub fn free_name(dir: &Path, base: &str, n: usize) -> String {
     (1..)
-        .map(|n| format!("{base}_{n}"))
-        .find(|name| !dir.join(format!("{name}.tgs")).exists())
+        .map(|k| format!("{base}_{k}"))
+        .find(|name| !taken(dir, name, n))
         .expect("свободное имя найдётся")
 }
 
@@ -141,70 +162,96 @@ pub fn free_name(dir: &Path, base: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Existing {
     pub id: String,
-    /// Имя существующего файла с расширением.
+    /// Имя существующего файла с расширением (при нарезке — первой
+    /// и последней клетки через многоточие).
     pub file_name: String,
     pub path: String,
     /// Предлагаемое новое имя без расширения: `name_1`.
     pub suggested: String,
 }
 
-/// Какие из запросов попадут на существующие файлы.
-pub fn find_existing(requests: &[SaveRequest]) -> Vec<Existing> {
+/// Какие из запросов попадут на существующие файлы; `counts` — сколько
+/// файлов у каждого запроса (клеток нарезки).
+pub fn find_existing(requests: &[SaveRequest], counts: &[usize]) -> Vec<Existing> {
     requests
         .iter()
-        .filter_map(|r| {
+        .zip(counts)
+        .filter_map(|(r, &n)| {
             let dir = r.folder()?;
             let base = safe_name(&r.name);
-            let path = dir.join(format!("{base}.tgs"));
-            path.exists().then(|| Existing {
+            let names = tile_names(&base, n);
+            let first = names
+                .iter()
+                .find(|name| dir.join(format!("{name}.tgs")).exists())?;
+            let file_name = if n > 1 {
+                format!("{}.tgs … {}.tgs", names[0], names[n - 1])
+            } else {
+                format!("{base}.tgs")
+            };
+            Some(Existing {
                 id: r.id.clone(),
-                file_name: format!("{base}.tgs"),
-                path: path.to_string_lossy().into_owned(),
-                suggested: free_name(&dir, &base),
+                file_name,
+                path: dir
+                    .join(format!("{first}.tgs"))
+                    .to_string_lossy()
+                    .into_owned(),
+                suggested: free_name(&dir, &base, n),
             })
         })
         .collect()
 }
 
-pub fn save_all(items: Vec<(SaveRequest, Option<Vec<u8>>)>, conflict: Conflict) -> Vec<Saved> {
+pub fn save_all(items: Vec<(SaveRequest, Vec<Vec<u8>>)>, conflict: Conflict) -> Vec<Saved> {
     items
         .into_iter()
-        .map(|(req, tgs)| {
+        .map(|(req, tiles)| {
             let failed = Saved {
                 id: req.id.clone(),
                 status: "failed",
                 path: None,
+                count: 0,
             };
             let Some(dir) = req.folder() else {
                 return failed;
             };
-            let (Some(tgs), true) = (tgs, std::fs::create_dir_all(&dir).is_ok()) else {
+            if tiles.is_empty() || std::fs::create_dir_all(&dir).is_err() {
                 return failed;
-            };
-            let base = safe_name(&req.name);
-            let mut path = dir.join(format!("{base}.tgs"));
-            if path.exists() && !req.overwrite {
+            }
+            let n = tiles.len();
+            let mut base = safe_name(&req.name);
+            if taken(&dir, &base, n) && !req.overwrite {
                 match conflict {
                     Conflict::Overwrite => {}
                     Conflict::Skip => {
+                        let first = tile_names(&base, n).remove(0);
                         return Saved {
                             id: req.id,
                             status: "skipped",
-                            path: Some(path.to_string_lossy().into_owned()),
-                        }
+                            path: Some(
+                                dir.join(format!("{first}.tgs"))
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            ),
+                            count: 0,
+                        };
                     }
-                    Conflict::Number => {
-                        path = dir.join(format!("{}.tgs", free_name(&dir, &base)));
-                    }
+                    Conflict::Number => base = free_name(&dir, &base, n),
                 }
             }
-            match std::fs::write(&path, tgs) {
-                Ok(()) => Saved {
-                    id: req.id,
-                    status: "saved",
-                    path: Some(path.to_string_lossy().into_owned()),
-                },
-                Err(_) => failed,
+            let paths: Vec<PathBuf> = tile_names(&base, n)
+                .iter()
+                .map(|name| dir.join(format!("{name}.tgs")))
+                .collect();
+            for (path, tgs) in paths.iter().zip(&tiles) {
+                if std::fs::write(path, tgs).is_err() {
+                    return failed;
+                }
+            }
+            Saved {
+                id: req.id,
+                status: "saved",
+                path: Some(paths[0].to_string_lossy().into_owned()),
+                count: n,
             }
         })
         .collect()
@@ -255,7 +302,7 @@ mod tests {
                     dir: Some(dir.clone()),
                     ..Default::default()
                 },
-                Some(vec![1, 2, 3]),
+                vec![vec![1, 2, 3]],
             )
         };
 
@@ -265,7 +312,7 @@ mod tests {
         assert_eq!(skipped[0].status, "skipped");
         let numbered = save_all(vec![req("3")], Conflict::Number);
         assert!(numbered[0].path.as_ref().unwrap().ends_with("star_1.tgs"));
-        let existing = find_existing(&[req("5").0]);
+        let existing = find_existing(&[req("5").0], &[1]);
         assert_eq!(existing.len(), 1);
         assert_eq!(existing[0].suggested, "star_2");
         let mut forced = req("6");
@@ -289,7 +336,7 @@ mod tests {
                     subfolder: Some("tgs".into()),
                     ..Default::default()
                 },
-                Some(vec![1]),
+                vec![vec![1]],
             )],
             Conflict::Number,
         );
@@ -323,10 +370,35 @@ mod tests {
                     dir: Some(d.to_string_lossy().into_owned()),
                     ..Default::default()
                 },
-                None,
+                Vec::new(),
             )],
             Conflict::Overwrite,
         );
         assert_eq!(out[0].status, "failed");
+    }
+
+    #[test]
+    fn grid_tiles_are_numbered_and_kept_together() {
+        let d = tmp("tiles");
+        let dir = d.to_string_lossy().into_owned();
+        let req = |id: &str| {
+            (
+                SaveRequest {
+                    id: id.into(),
+                    name: "heart".into(),
+                    dir: Some(dir.clone()),
+                    ..Default::default()
+                },
+                vec![vec![1]; 12],
+            )
+        };
+        let first = save_all(vec![req("1")], Conflict::Number);
+        assert_eq!(first[0].count, 12);
+        assert!(d.join("heart_01.tgs").exists() && d.join("heart_12.tgs").exists());
+        let existing = find_existing(&[req("2").0], &[12]);
+        assert_eq!(existing[0].file_name, "heart_01.tgs … heart_12.tgs");
+        assert_eq!(existing[0].suggested, "heart_1");
+        let again = save_all(vec![req("3")], Conflict::Number);
+        assert!(again[0].path.as_ref().unwrap().ends_with("heart_1_01.tgs"));
     }
 }

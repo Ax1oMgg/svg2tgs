@@ -1,25 +1,27 @@
 //! Размещение рисунка на канвасе.
 //!
 //! Рисунок проходит цепочку шагов, каждый работает с результатом предыдущего:
-//! отразить → повернуть → пропорции → обрезать края → вписать в рабочую
-//! область (канвас минус отступ и обводка) → сдвинуть на заданное положение.
+//! отразить → пропорции → повернуть → обрезать по рамке → вписать в рабочую
+//! область (холст минус отступ и обводка) → сдвинуть на заданное положение.
 //! Всё, что после этого вышло за рабочую область или за рамку обрезки,
 //! отрезается. Итог — одна матрица и один прямоугольник видимой области.
+//!
+//! Холст — сетка нарезки из `cols × rows` канвасов (без нарезки — один канвас).
 
 use usvg::Transform;
 
-use crate::options::{Bounds, Fit, Options};
+use crate::options::{Bounds, Fit, Grid, Options};
 
 /// Где и как рисуется рисунок.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placement {
-    /// Из координат SVG в пиксели канваса.
+    /// Из координат SVG в пиксели холста.
     pub transform: Transform,
-    /// Видимая область `[x0, y0, x1, y1]` в пикселях канваса.
+    /// Видимая область `[x0, y0, x1, y1]` в пикселях холста.
     pub clip: [f64; 4],
 }
 
-/// Наименьший видимый остаток после обрезки краёв, доля стороны.
+/// Наименьший видимый остаток после обрезки, доля стороны.
 const MIN_KEEP: f32 = 0.05;
 
 /// Рамка `[x0, y0, x1, y1]` прямоугольника `w × h` после матрицы `m`.
@@ -51,79 +53,106 @@ pub fn source_rect(tree: &usvg::Tree, options: &Options) -> [f32; 4] {
     [0.0, 0.0, dw, dh]
 }
 
-/// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
-/// на квадратном канвасе стороной `canvas`.
-pub fn place(rect: [f32; 4], canvas: f32, options: &Options) -> Placement {
-    let [rx, ry, w, h] = rect;
+fn finite_or(v: f32, default: f32) -> f32 {
+    if v.is_finite() {
+        v
+    } else {
+        default
+    }
+}
 
-    // 1–3. Отразить, повернуть, растянуть — вокруг центра рисунка.
-    let fx = if options.flip_h { -1.0 } else { 1.0 };
-    let fy = if options.flip_v { -1.0 } else { 1.0 };
-    let aspect = if options.aspect.is_finite() && options.aspect > 0.0 {
+/// Пропорции в допустимых пределах.
+fn aspect(options: &Options) -> f32 {
+    if options.aspect.is_finite() && options.aspect > 0.0 {
         options.aspect.clamp(0.25, 4.0)
     } else {
         1.0
-    };
-    let rotation = if options.rotation.is_finite() {
-        options.rotation
-    } else {
-        0.0
-    };
-    let shape = Transform::from_scale(aspect, 1.0)
-        .pre_rotate(rotation)
+    }
+}
+
+/// Размеры холста `(ширина, высота)` для канваса `tile` и сетки.
+pub fn board_size(tile: f32, grid: Grid) -> (f32, f32) {
+    (tile * grid.cols as f32, tile * grid.rows as f32)
+}
+
+/// Соотношение сторон рисунка после трансформаций и обрезки (ширина / высота) —
+/// по нему подбирается сетка нарезки.
+pub fn shaped_aspect(rect: [f32; 4], options: &Options) -> f32 {
+    let (_, crop) = shape(rect, options);
+    (crop[2] - crop[0]) / (crop[3] - crop[1])
+}
+
+/// Отразить, растянуть, повернуть — вокруг центра рисунка; затем рамка
+/// обрезки в получившихся координатах (центр рисунка — начало координат).
+fn shape(rect: [f32; 4], options: &Options) -> (Transform, [f32; 4]) {
+    let [rx, ry, w, h] = rect;
+    let fx = if options.flip_h { -1.0 } else { 1.0 };
+    let fy = if options.flip_v { -1.0 } else { 1.0 };
+    let k = aspect(options);
+    let shape = Transform::from_rotate(finite_or(options.rotation, 0.0))
+        .pre_scale(k, 1.0)
         .pre_scale(fx, fy)
         .pre_translate(-rx - w / 2.0, -ry - h / 2.0);
 
-    // 4. Обрезать края — доли рамки, которую видит пользователь.
+    // Рамка повёрнутого рисунка.
     let b = bounds(&shape.pre_translate(rx, ry), w, h);
+    let Some(c) = options.crop else {
+        return (shape, b);
+    };
+    // Рамка обрезки — от рамки рисунка без поворота, относительно центра.
+    let (w0, h0) = (w * k, h);
+    let frac = |v: f32| finite_or(v, 0.0).clamp(-4.0, 1.0);
+    let mut f = [
+        -w0 / 2.0 + frac(c.left) * w0,
+        -h0 / 2.0 + frac(c.top) * h0,
+        w0 / 2.0 - frac(c.right) * w0,
+        h0 / 2.0 - frac(c.bottom) * h0,
+    ];
+    // Не шире рисунка и не меньше MIN_KEEP его стороны.
     let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
-    let c = options.crop;
-    let frac = |v: f32| {
-        if v.is_finite() {
-            v.clamp(0.0, 1.0)
-        } else {
-            0.0
+    let fit = |lo: &mut f32, hi: &mut f32, min: f32, max: f32, keep: f32| {
+        *lo = lo.max(min);
+        *hi = hi.min(max);
+        if *hi - *lo < keep {
+            let mid = ((*lo + *hi) / 2.0).clamp(min + keep / 2.0, max - keep / 2.0);
+            *lo = mid - keep / 2.0;
+            *hi = mid + keep / 2.0;
         }
     };
-    let (mut l, mut r) = (frac(c.left), frac(c.right));
-    let (mut t, mut bo) = (frac(c.top), frac(c.bottom));
-    let squeeze = |a: &mut f32, b: &mut f32| {
-        let over = *a + *b - (1.0 - MIN_KEEP);
-        if over > 0.0 {
-            let k = (1.0 - MIN_KEEP) / (*a + *b);
-            *a *= k;
-            *b *= k;
-        }
-    };
-    squeeze(&mut l, &mut r);
-    squeeze(&mut t, &mut bo);
-    let crop = [b[0] + l * bw, b[1] + t * bh, b[2] - r * bw, b[3] - bo * bh];
+    let (mut x0, mut x1, mut y0, mut y1) = (f[0], f[2], f[1], f[3]);
+    fit(&mut x0, &mut x1, b[0], b[2], (MIN_KEEP * bw).max(1e-6));
+    fit(&mut y0, &mut y1, b[1], b[3], (MIN_KEEP * bh).max(1e-6));
+    f = [x0, y0, x1, y1];
+    (shape, f)
+}
+
+/// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
+/// на холсте из `grid` канвасов стороной `tile`.
+pub fn place(rect: [f32; 4], tile: f32, grid: Grid, options: &Options) -> Placement {
+    let (shape, crop) = shape(rect, options);
     let (cw, ch) = ((crop[2] - crop[0]).max(1e-6), (crop[3] - crop[1]).max(1e-6));
 
-    // 5. Вписать в рабочую область: канвас минус отступ и место под обводку.
-    let padding = options.padding.clamp(0.0, 0.45);
-    let area = (canvas * (1.0 - 2.0 * padding) - 2.0 * options.outline_width()).max(1.0);
-    let origin = (canvas - area) / 2.0;
-    let contain = (area / cw).min(area / ch);
+    // Вписать в рабочую область: холст минус отступ (доля канваса)
+    // и место под обводку.
+    let (bw, bh) = board_size(tile, grid);
+    let inset = tile * options.padding.clamp(0.0, 0.45) + options.outline_width();
+    let area_w = (bw - 2.0 * inset).max(1.0);
+    let area_h = (bh - 2.0 * inset).max(1.0);
+    let (ox, oy) = ((bw - area_w) / 2.0, (bh - area_h) / 2.0);
+    let contain = (area_w / cw).min(area_h / ch);
     let scale = match options.fit {
         Fit::Contain => contain,
-        Fit::Cover => (area / cw).max(area / ch),
-        Fit::Width => area / cw,
-        Fit::Height => area / ch,
-        Fit::Free => contain * options.scale.clamp(0.05, 20.0),
+        Fit::Cover => (area_w / cw).max(area_h / ch),
+        Fit::Width => area_w / cw,
+        Fit::Height => area_h / ch,
+        Fit::Free => contain * finite_or(options.scale, 1.0).clamp(0.05, 20.0),
     };
 
-    // 6. Положение: доля свободного места (или лишнего, если рисунок больше).
-    let pos = |v: f32| {
-        if v.is_finite() {
-            v.clamp(0.0, 1.0)
-        } else {
-            0.5
-        }
-    };
+    // Положение: доля свободного места (или лишнего, если рисунок больше).
+    let pos = |v: f32| finite_or(v, 0.5).clamp(0.0, 1.0);
     let (pw, ph) = (cw * scale, ch * scale);
-    let x = origin + (area - pw) * pos(options.position_x);
-    let y = origin + (area - ph) * pos(options.position_y);
+    let x = ox + (area_w - pw) * pos(options.position_x);
+    let y = oy + (area_h - ph) * pos(options.position_y);
 
     let transform = Transform::from_translate(x, y)
         .pre_scale(scale, scale)
@@ -131,12 +160,11 @@ pub fn place(rect: [f32; 4], canvas: f32, options: &Options) -> Placement {
         .pre_concat(shape);
 
     // Видимое — пересечение рабочей области и обрезанного рисунка.
-    let (a0, a1) = (origin as f64, (origin + area) as f64);
     let clip = [
-        (x as f64).max(a0),
-        (y as f64).max(a0),
-        ((x + pw) as f64).min(a1),
-        ((y + ph) as f64).min(a1),
+        (x as f64).max(ox as f64),
+        (y as f64).max(oy as f64),
+        ((x + pw) as f64).min((ox + area_w) as f64),
+        ((y + ph) as f64).min((oy + area_h) as f64),
     ];
     Placement { transform, clip }
 }
@@ -153,13 +181,17 @@ mod tests {
         (t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty)
     }
 
+    fn place1(rect: [f32; 4], canvas: f32, o: &Options) -> Placement {
+        place(rect, canvas, Grid { cols: 1, rows: 1 }, o)
+    }
+
     fn close(a: (f32, f32), b: (f32, f32)) -> bool {
         (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
     }
 
     #[test]
     fn contain_centers_like_before() {
-        let p = place(size(200.0, 100.0), 512.0, &Options::default());
+        let p = place1(size(200.0, 100.0), 512.0, &Options::default());
         assert!(close(map(&p.transform, 0.0, 0.0), (0.0, 128.0)));
         assert!(close(map(&p.transform, 200.0, 100.0), (512.0, 384.0)));
         assert_eq!(p.clip, [0.0, 128.0, 512.0, 384.0]);
@@ -173,7 +205,7 @@ mod tests {
             position_y: 0.0,
             ..Options::default()
         };
-        let p = place(size(100.0, 300.0), 512.0, &o);
+        let p = place1(size(100.0, 300.0), 512.0, &o);
         assert!(close(map(&p.transform, 0.0, 0.0), (0.0, 0.0)));
         assert!(close(map(&p.transform, 100.0, 100.0), (512.0, 512.0)));
         assert_eq!(p.clip, [0.0, 0.0, 512.0, 512.0]);
@@ -186,7 +218,7 @@ mod tests {
             padding: 0.1,
             ..Options::default()
         };
-        let p = place(size(300.0, 100.0), 500.0, &o);
+        let p = place1(size(300.0, 100.0), 500.0, &o);
         assert_eq!(p.clip, [50.0, 50.0, 450.0, 450.0]);
     }
 
@@ -196,27 +228,87 @@ mod tests {
             flip_h: true,
             ..Options::default()
         };
-        let p = place(size(100.0, 100.0), 100.0, &o);
+        let p = place1(size(100.0, 100.0), 100.0, &o);
         assert!(close(map(&p.transform, 0.0, 0.0), (100.0, 0.0)));
 
         let o = Options {
             rotation: 90.0,
             ..Options::default()
         };
-        let p = place(size(200.0, 100.0), 200.0, &o);
+        let p = place1(size(200.0, 100.0), 200.0, &o);
         // После поворота рисунок стоит, левый верх уходит в правый верх.
         assert!(close(map(&p.transform, 0.0, 0.0), (150.0, 0.0)));
 
         let o = Options {
-            crop: crate::options::Crop {
+            crop: Some(crate::options::Crop {
                 right: 0.5,
                 ..Default::default()
-            },
+            }),
             ..Options::default()
         };
-        let p = place(size(200.0, 100.0), 100.0, &o);
+        let p = place1(size(200.0, 100.0), 100.0, &o);
         // Осталась левая половина (квадрат) — на весь канвас.
         assert!(close(map(&p.transform, 100.0, 100.0), (100.0, 100.0)));
         assert_eq!(p.clip, [0.0, 0.0, 100.0, 100.0]);
+    }
+
+    #[test]
+    fn aspect_is_applied_before_rotation() {
+        // Квадрат, растянутый вдвое по ширине и повёрнутый на 90°, стоит
+        // вертикально: высота вдвое больше ширины.
+        let o = Options {
+            aspect: 2.0,
+            rotation: 90.0,
+            ..Options::default()
+        };
+        let a = shaped_aspect(size(100.0, 100.0), &o);
+        assert!((a - 0.5).abs() < 1e-4, "{a}");
+    }
+
+    #[test]
+    fn crop_frame_stays_put_when_rotating() {
+        // Рамка — средняя половина рисунка без поворота. При повороте на 30°
+        // она остаётся того же размера: повёрнутый рисунок больше рамки.
+        let crop = Some(crate::options::Crop {
+            top: 0.25,
+            right: 0.25,
+            bottom: 0.25,
+            left: 0.25,
+        });
+        let still = Options {
+            crop,
+            ..Options::default()
+        };
+        let turned = Options {
+            rotation: 30.0,
+            ..still.clone()
+        };
+        let (_, a) = shape(size(100.0, 100.0), &still);
+        let (_, b) = shape(size(100.0, 100.0), &turned);
+        for (x, y) in a.iter().zip(b) {
+            assert!((x - y).abs() < 1e-4, "{a:?} {b:?}");
+        }
+        assert!((a[2] - a[0] - 50.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn auto_grid_matches_proportions() {
+        assert_eq!(Grid::auto(1.6, 8), Grid { cols: 8, rows: 5 });
+        assert_eq!(Grid::auto(1.5, 8), Grid { cols: 6, rows: 4 });
+        assert_eq!(Grid::auto(1.0, 8), Grid { cols: 8, rows: 8 });
+        assert_eq!(Grid::auto(2.0, 8), Grid { cols: 8, rows: 4 });
+    }
+
+    #[test]
+    fn grid_board_holds_the_whole_drawing() {
+        // Рисунок 2 : 1 на сетке 2 × 1 заполняет оба канваса.
+        let p = place(
+            size(200.0, 100.0),
+            512.0,
+            Grid { cols: 2, rows: 1 },
+            &Options::default(),
+        );
+        assert!(close(map(&p.transform, 200.0, 100.0), (1024.0, 512.0)));
+        assert_eq!(p.clip, [0.0, 0.0, 1024.0, 512.0]);
     }
 }
