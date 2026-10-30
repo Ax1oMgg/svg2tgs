@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024">
+  <!-- Generator: Adobe Illustrator 29.8.3, SVG Export Plug-In . SVG Version: 2.1.1 Build 3)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #fff;
+      }
+
+      .st1, .st2 {
+        stroke: #fff;
+        stroke-width: 17px;
+      }
+
+      .st1, .st2, .st3 {
+        fill: none;
+        stroke-linecap: round;
+      }
+
+      .st4 {
+        fill: url(#_Безымянный_градиент_103);
+      }
+
+      .st5 {
+        filter: url(#foldShadow);
+        opacity: .3;
+      }
+
+      .st5, .st6 {
+        isolation: isolate;
+      }
+
+      .st6 {
+        filter: url(#bodyShadow);
+        opacity: .1;
+      }
+
+      .st7 {
+        fill: url(#_Безымянный_градиент);
+      }
+
+      .st2 {
+        stroke-linejoin: round;
+      }
+
+      .st3 {
+        stroke: url(#_Безымянный_градиент_3);
+        stroke-width: 2px;
+      }
+    </style>
+    <filter id="bodyShadow" x="160" y="170" width="710" height="710">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <linearGradient id="_Безымянный_градиент" data-name="Безымянный градиент" x1="18" y1="890" x2="890" y2="18" gradientTransform="translate(0 1024) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4c94ff"/>
+      <stop offset="1" stop-color="#2156c9"/>
+    </linearGradient>
+    <filter id="foldShadow" x="548" y="178" width="330" height="310">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+    <linearGradient id="_Безымянный_градиент_103" data-name="Безымянный градиент 103" x1="774" y1="777.4" x2="679.8" y2="683.2" gradientTransform="translate(0 1024) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e0e0e0"/>
+      <stop offset="0" stop-color="#e3e3e3"/>
+      <stop offset="0" stop-color="#f0f0f0"/>
+      <stop offset=".2" stop-color="#f7f7f7"/>
+      <stop offset=".4" stop-color="#fafafa"/>
+      <stop offset=".5" stop-color="#f3f3f3"/>
+      <stop offset=".7" stop-color="#e2e2e2"/>
+      <stop offset=".9" stop-color="#c5c5c5"/>
+      <stop offset="1" stop-color="#bdbdbd"/>
+    </linearGradient>
+    <linearGradient id="_Безымянный_градиент_3" data-name="Безымянный градиент 3" x1="621.9" y1="934.2" x2="932.4" y2="626.4" gradientTransform="translate(0 1024) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#888" stop-opacity=".3"/>
+    </linearGradient>
+  </defs>
+  <g class="st6">
+    <path d="M250.4,76h357c16.4,51.8,16.4,121.3,23.2,182.6,8.2,77.7,69.5,124,155.3,124s121.3,6.8,162.1,27.2v363.8c0,96.7-77.7,174.4-174.4,174.4H250.4c-96.7,0-174.4-77.7-174.4-174.4V250.4c0-96.7,77.7-174.4,174.4-174.4Z"/>
+  </g>
+  <path class="st7" d="M250.4,76h357c16.4,51.8,16.4,121.3,23.2,182.6,8.2,77.7,69.5,124,155.3,124s121.3,6.8,162.1,27.2v363.8c0,96.7-77.7,174.4-174.4,174.4H250.4c-96.7,0-174.4-77.7-174.4-174.4V250.4c0-96.7,77.7-174.4,174.4-174.4Z"/>
+  <path class="st2" d="M242.2,243.6h416.9M378.5,243.6c-38.2,25.9-57.2,70.9-57.2,134.9s57.2,133.5,133.5,133.5h117.2c77.7,0,130.8,58.6,130.8,134.9s-54.5,133.5-130.8,133.5"/>
+  <path class="st1" d="M242.2,780.4h536.8"/>
+  <g class="st5">
+    <path d="M607.4,77.4c39.5,36.8,85.8,85.8,137.6,137.6,68.1,68.1,139,137.6,200.3,194.8-38.1-19.1-89.9-25.9-159.4-25.9s-147.1-47.7-155.3-125.4c-6.8-61.3-6.8-129.4-23.2-181.2Z"/>
+  </g>
+  <path class="st4" d="M607.4,76c40.9,38.1,88.6,87.2,141.7,140.3,68.1,68.1,139,137.6,198.9,193.5-38.1-19.1-89.9-25.9-159.4-25.9s-147.1-47.7-155.3-125.4c-6.8-61.3-9.5-130.8-25.9-182.6Z"/>
+  <path class="st3" d="M607.9,76c40.9,38.1,85.3,87.2,138.5,140.3,68.1,68.1,141.7,137.6,201.6,193.5"/>
+  <circle class="st0" cx="242.2" cy="243.6" r="40.9"/>
+  <circle class="st0" cx="242.2" cy="780.4" r="40.9"/>
+  <circle class="st0" cx="779" cy="780.4" r="40.9"/>
+</svg>
