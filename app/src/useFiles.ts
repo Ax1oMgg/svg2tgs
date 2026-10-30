@@ -18,9 +18,12 @@ const THUMB_SIZE = 96;
 /** Пауза перед пересчётом: не запускать конвертацию на каждый шаг ползунка. */
 const DEBOUNCE_MS = 250;
 
+/** Замечание только для вида «Эмодзи» — на значок файла в списке не влияет. */
+export const EMOJI_ONLY = "thin_lines_for_emoji";
+
 function statusOf(o: Outcome): Status {
   if (o.error) return "error";
-  return o.warnings.some((w) => !isInfo(w)) ? "warn" : "ok";
+  return o.warnings.some((w) => !isInfo(w) && w.code !== EMOJI_ONLY) ? "warn" : "ok";
 }
 
 let counter = 0;
@@ -28,6 +31,10 @@ const newId = () => `f${Date.now().toString(36)}${(counter++).toString(36)}`;
 
 /** Настройки, по которым конвертируется файл. */
 export const effectiveOptions = (item: FileItem, global: Options): Options => item.options ?? global;
+
+/** Настройки для ядра: пресет «эмодзи» включает проверку тонких линий —
+ *  на сам файл он не влияет, а замечание показывается в виде «Эмодзи». */
+const forCore = (o: Options): Options => ({ ...o, preset: "emoji" });
 
 export function useFiles(options: Options) {
   const [items, setItems] = useState<FileItem[]>([]);
@@ -58,7 +65,7 @@ export function useFiles(options: Options) {
       const rev = revs.current.get(id);
       const fresh = () => revs.current.get(id) === rev;
       backend
-        .convert(id, item.source, effectiveOptions(item, optionsRef.current))
+        .convert(id, item.source, forCore(effectiveOptions(item, optionsRef.current)))
         .then(async (outcome) => {
           if (!fresh()) return;
           const thumb = outcome.error ? undefined : await backend.preview(id, "tgs", THUMB_SIZE);
@@ -69,7 +76,7 @@ export function useFiles(options: Options) {
           if (fresh()) {
             update(id, {
               status: "error",
-              outcome: { id, tgsBytes: null, warnings: [], error: "read_failed" },
+              outcome: { id, tgsBytes: null, grid: [1, 1], warnings: [], error: "read_failed" },
             });
           }
         })
@@ -141,20 +148,30 @@ export function useFiles(options: Options) {
     setItems([]);
   }, []);
 
-  /** Свои настройки файла (`undefined` — снова общие); файл пересчитывается. */
-  const setItemOptions = useCallback(
-    (id: string, own: Options | undefined) => {
-      setItems((list) => list.map((it) => (it.id === id ? { ...it, options: own } : it)));
-      clearTimeout(timers.current.get(id));
-      timers.current.set(
-        id,
-        setTimeout(() => {
-          timers.current.delete(id);
-          reconvert([id]);
-        }, DEBOUNCE_MS),
-      );
+  /** Свои настройки файлов (`undefined` — снова общие); файлы пересчитываются. */
+  const setOptionsFor = useCallback(
+    (entries: [string, Options | undefined][]) => {
+      if (entries.length === 0) return;
+      const map = new Map(entries);
+      setItems((list) => list.map((it) => (map.has(it.id) ? { ...it, options: map.get(it.id) } : it)));
+      itemsRef.current = itemsRef.current.map((it) => (map.has(it.id) ? { ...it, options: map.get(it.id) } : it));
+      for (const id of map.keys()) {
+        clearTimeout(timers.current.get(id));
+        timers.current.set(
+          id,
+          setTimeout(() => {
+            timers.current.delete(id);
+            reconvert([id]);
+          }, DEBOUNCE_MS),
+        );
+      }
     },
     [reconvert],
+  );
+
+  const setItemOptions = useCallback(
+    (id: string, own: Options | undefined) => setOptionsFor([[id, own]]),
+    [setOptionsFor],
   );
 
   // Смена общих настроек — пересчитать файлы, у которых нет своих.
@@ -171,5 +188,5 @@ export function useFiles(options: Options) {
     return () => clearTimeout(t);
   }, [options, reconvert]);
 
-  return { items, add, remove, clear, setItemOptions };
+  return { items, add, remove, clear, setItemOptions, setOptionsFor };
 }

@@ -6,6 +6,8 @@ import { DEFAULT_OPTIONS, type Options } from "./types";
 export type Theme = "system" | "light" | "dark";
 export type PreviewMode = "chat" | "closeup";
 export type PreviewBg = "light" | "dark" | "checker";
+/** Как показать результат: стикером или эмодзи. На файл не влияет. */
+export type PreviewKind = "sticker" | "emoji";
 
 /** Поле с флажком: выключенное не применяется, но значение помнится. */
 export interface Toggle {
@@ -30,6 +32,7 @@ export interface Prefs {
   export: ExportPrefs;
   previewMode: PreviewMode;
   previewBg: PreviewBg;
+  previewKind: PreviewKind;
 }
 
 const KEY = "svg2tgs.prefs.v1";
@@ -49,6 +52,7 @@ export function defaultPrefs(): Prefs {
     },
     previewMode: "chat",
     previewBg: "light",
+    previewKind: "sticker",
   };
 }
 
@@ -58,15 +62,25 @@ export function loadPrefs(): Prefs {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw) as Partial<Prefs>;
+    // До 0.1.5 «Стикер / Эмодзи» был настройкой экспорта.
+    const kind = saved.previewKind ?? (saved.options?.preset === "emoji" ? "emoji" : base.previewKind);
     return {
       ...base,
       ...saved,
-      options: { ...base.options, ...saved.options },
+      previewKind: kind,
+      options: migrateOptions({ ...base.options, ...saved.options }),
       export: offAtStart({ ...base.export, ...saved.export }),
     };
   } catch {
     return base;
   }
+}
+
+/** Настройки из прошлых версий: обрезка «без отступов» значила «без обрезки». */
+function migrateOptions(o: Options): Options {
+  const c = o.crop;
+  if (c && c.top === 0 && c.right === 0 && c.bottom === 0 && c.left === 0) return { ...o, crop: null };
+  return o;
 }
 
 /** При запуске суффикс, префикс и подпапка выключены; текст сохраняется. */

@@ -6,9 +6,12 @@ interface Props {
   lang: Lang;
   items: FileItem[];
   selectedId: string | null;
+  /** Все выбранные файлы (в том числе `selectedId`). */
+  selectedIds: ReadonlySet<string>;
   onlyProblems: boolean;
   onToggleProblems: (v: boolean) => void;
-  onSelect: (id: string) => void;
+  /** Выбор: `add` — Ctrl (добавить/убрать), `range` — Shift (подряд). */
+  onSelect: (id: string, how: { add: boolean; range: boolean }, shown: string[]) => void;
   onRemove: (id: string) => void;
   onClear: () => void;
   onAddFiles: () => void;
@@ -43,7 +46,8 @@ export function splitName(name: string): [string, string] {
   return [name.slice(0, cut), name.slice(cut)];
 }
 
-/** Список добавленных файлов со статусом и размером результата. */
+/** Список добавленных файлов со статусом и размером результата.
+ *  Ctrl — добавить файл к выбору, Shift — выбрать подряд. */
 export function FileList(props: Props) {
   const { lang, items, selectedId, onlyProblems } = props;
   const t = strings[lang];
@@ -51,6 +55,7 @@ export function FileList(props: Props) {
   const count = (s: FileItem["status"]) => items.filter((it) => it.status === s).length;
   const pending = count("pending");
   const percent = items.length ? Math.round(((items.length - pending) / items.length) * 100) : 0;
+  const shownIds = shown.map((it) => it.id);
 
   return (
     <aside className="files" aria-label={t.files}>
@@ -99,19 +104,22 @@ export function FileList(props: Props) {
         {t.onlyProblems}
       </label>
 
-      <ul className="files__list scroll" role="listbox" aria-label={t.files}>
+      <ul className="files__list scroll" role="listbox" aria-label={t.files} aria-multiselectable="true" title={t.selectHint}>
         {shown.map((it) => {
           const [head, tail] = splitName(it.name);
           return (
             <li
               key={it.id}
               role="option"
-              aria-selected={it.id === selectedId}
+              aria-selected={props.selectedIds.has(it.id)}
               tabIndex={0}
-              className={`file file--${it.status}${it.id === selectedId ? " file--selected" : ""}`}
-              onClick={() => props.onSelect(it.id)}
+              className={`file file--${it.status}${props.selectedIds.has(it.id) ? " file--selected" : ""}${it.id === selectedId ? " file--current" : ""}`}
+              onClick={(e) =>
+                props.onSelect(it.id, { add: e.ctrlKey || e.metaKey, range: e.shiftKey }, shownIds)
+              }
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") props.onSelect(it.id);
+                if (e.key === "Enter" || e.key === " ")
+                  props.onSelect(it.id, { add: e.ctrlKey || e.metaKey, range: e.shiftKey }, shownIds);
                 if (e.key === "Delete") props.onRemove(it.id);
               }}
             >

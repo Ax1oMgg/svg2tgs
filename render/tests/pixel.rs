@@ -7,8 +7,10 @@
 
 use std::path::PathBuf;
 
-use svg2tgs_core::{convert, Options};
-use svg2tgs_render::{compare, diff_sheet, render_svg, render_tgs, Diff, RLOTTIE_VENDOR};
+use svg2tgs_core::{convert, convert_grid, Options};
+use svg2tgs_render::{
+    compare, diff_sheet, render_svg, render_tgs, render_tgs_grid, Diff, RLOTTIE_VENDOR,
+};
 
 const SIZE: u32 = 256;
 
@@ -232,15 +234,29 @@ fn transforms_and_placement_match_svg() {
         (
             "crop-width-top",
             Options {
-                crop: Crop {
+                crop: Some(Crop {
                     left: 0.1,
                     right: 0.2,
                     top: 0.05,
                     bottom: 0.0,
-                },
+                }),
                 fit: Fit::Width,
                 position_y: 0.0,
                 padding: 0.08,
+                ..Options::default()
+            },
+        ),
+        (
+            "aspect-then-rotate-crop",
+            Options {
+                aspect: 1.5,
+                rotation: 35.0,
+                crop: Some(Crop {
+                    left: 0.15,
+                    right: 0.1,
+                    top: -0.1,
+                    bottom: 0.2,
+                }),
                 ..Options::default()
             },
         ),
@@ -321,4 +337,111 @@ fn content_bounds_hug_the_drawing() {
     // По контейнеру — круг мельче и не по центру: картинка заметно другая.
     let boxed = render_tgs(&convert(svg, &Options::default()).unwrap().tgs, SIZE, 0).unwrap();
     assert!(compare(&expected, &boxed).bad_ratio > MAX_BAD);
+}
+
+/// Сравнение с картинкой различий при провале.
+fn assert_close(name: &str, expected: &svg2tgs_render::Image, result: &svg2tgs_render::Image) {
+    let d = compare(expected, result);
+    if d.mean > MAX_MEAN || d.bad_ratio > MAX_BAD {
+        std::fs::create_dir_all(diff_dir()).unwrap();
+        let out = diff_dir().join(format!("{name}.png"));
+        std::fs::write(&out, diff_sheet(expected, result).to_png()).unwrap();
+        panic!("{name}: {d:?}, см. {}", out.display());
+    }
+}
+
+/// Обрезка по фону: рисунок на весь канвас и его обводка режутся по
+/// скруглённой рамке фона (по внутреннему краю её рамки). Эталон — SVG
+/// с `clipPath` той же формы.
+#[test]
+fn drawing_is_clipped_by_rounded_background() {
+    use svg2tgs_core::{Background, Outline};
+    let art = r##"<rect width="100" height="100" fill="#2f81f7"/><circle cx="50" cy="50" r="20" fill="#fff"/>"##;
+    let svg =
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{art}</svg>"#);
+    let (r, w) = (120.0_f32, 16.0_f32);
+    let options = Options {
+        background: Background::Solid("#fbe0e4".into()),
+        background_radius: r,
+        background_border: Some(Outline {
+            width: w,
+            color: "#20c070".into(),
+        }),
+        ..Options::default()
+    };
+    let reference = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <defs><clipPath id="f"><rect x="{w}" y="{w}" width="{iw}" height="{iw}" rx="{ir}"/></clipPath></defs>
+        <rect width="512" height="512" rx="{r}" fill="#fbe0e4"/>
+        <rect x="{h}" y="{h}" width="{bw}" height="{bw}" rx="{br}" fill="none" stroke="#20c070" stroke-width="{w}"/>
+        <g clip-path="url(#f)"><g transform="scale(5.12)">{art}</g></g></svg>"##,
+        h = w / 2.0,
+        bw = 512.0 - w,
+        br = r - w / 2.0,
+        iw = 512.0 - 2.0 * w,
+        ir = r - w,
+    );
+    let expected = render_svg(reference.as_bytes(), SIZE, &Options::default()).unwrap();
+    let result = render_tgs(&convert(svg.as_bytes(), &options).unwrap().tgs, SIZE, 0).unwrap();
+    assert_close("background-clip-tgs", &expected, &result);
+    let preview = render_svg(svg.as_bytes(), SIZE, &options).unwrap();
+    assert_close("background-clip-preview", &expected, &preview);
+
+    // Без обрезки углы рисунка видны поверх фона — картинка другая.
+    let open = Options {
+        background_clip: false,
+        ..options
+    };
+    let unclipped = render_tgs(&convert(svg.as_bytes(), &open).unwrap().tgs, SIZE, 0).unwrap();
+    assert!(compare(&expected, &unclipped).bad_ratio > MAX_BAD);
+}
+
+/// Нарезка на эмодзи: клетки, сложенные вплотную, дают тот же рисунок,
+/// что и весь холст целиком, — вместе с обводкой вокруг всего рисунка
+/// (а не вдоль разрезов) и фоном на весь холст.
+#[test]
+fn grid_tiles_assemble_into_the_whole_picture() {
+    use svg2tgs_core::{Background, Grid, Outline};
+    let svg = std::fs::read(fixtures_dir().join("shapes-basic.svg")).unwrap();
+    let options = Options {
+        grid: Some(Grid { cols: 3, rows: 2 }),
+        outline: Some(Outline {
+            width: 10.0,
+            color: "#20c070".into(),
+        }),
+        background: Background::Solid("#fbe0e4".into()),
+        background_radius: 90.0,
+        padding: 0.05,
+        ..Options::default()
+    };
+    let tiles = convert_grid(&svg, &options).unwrap().tiles;
+    assert_eq!(tiles.len(), 6);
+    let cell = SIZE / 2;
+    let tgs: Vec<Vec<u8>> = tiles.into_iter().map(|t| t.tgs).collect();
+    let result = render_tgs_grid(&tgs, 3, cell).unwrap();
+    let preview = render_svg(&svg, 3 * cell, &options).unwrap();
+    assert_eq!(
+        (preview.width, preview.height),
+        (result.width, result.height)
+    );
+    // Обводку эталон (resvg) не рисует — сравниваем без неё…
+    let plain = Options {
+        outline: None,
+        ..options.clone()
+    };
+    let plain_tiles: Vec<Vec<u8>> = convert_grid(&svg, &plain)
+        .unwrap()
+        .tiles
+        .into_iter()
+        .map(|t| t.tgs)
+        .collect();
+    let plain_result = render_tgs_grid(&plain_tiles, 3, cell).unwrap();
+    let plain_preview = render_svg(&svg, 3 * cell, &plain).unwrap();
+    assert_close("grid", &plain_preview, &plain_result);
+    // …а с обводкой сверяем с одним большим TGS на том же холсте: собранный
+    // из клеток результат не должен отличаться от целого.
+    assert!(
+        compare(&result, &plain_result).bad_ratio > MAX_BAD,
+        "обводка видна"
+    );
 }

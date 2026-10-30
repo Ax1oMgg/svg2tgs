@@ -14,7 +14,7 @@ mod messages;
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use svg2tgs_core::{
-    Background, Bounds, Crop, Fit, Optimization, Options, Outline, Preset, Severity, Warning,
+    Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, Severity, Warning,
     MAX_OUTLINE,
 };
 
@@ -88,7 +88,8 @@ struct Cli {
     #[arg(long, default_value_t = 100.0)]
     aspect: f32,
 
-    /// Обрезать края, % стороны: сверху,справа,снизу,слева (например 0,10,0,10).
+    /// Обрезать края, % стороны рисунка без поворота: сверху,справа,снизу,слева
+    /// (например 0,10,0,10). Рамка стоит по центру и при `--rotate` не двигается.
     #[arg(long, value_parser = parse_crop)]
     crop: Option<Crop>,
 
@@ -103,6 +104,16 @@ struct Cli {
     /// Рамка фона внутри канваса: толщина и цвет, например `12:#000000`.
     #[arg(long, value_parser = parse_outline)]
     bg_border: Option<Outline>,
+
+    /// Не обрезать рисунок по скруглённой рамке фона.
+    #[arg(long)]
+    no_bg_clip: bool,
+
+    /// Нарезать на эмодзи по сетке: `8x5` (столбцы × строки) или `auto` —
+    /// по пропорциям рисунка, до 8 в ряд. Файлы: имя_01.tgs, имя_02.tgs…
+    /// по строкам слева направо.
+    #[arg(long, value_parser = parse_grid)]
+    grid: Option<GridArg>,
 
     /// Обводка вокруг рисунка: толщина в пикселях канваса и цвет,
     /// например `12` (белая) или `12:#000000`.
@@ -129,6 +140,35 @@ struct Cli {
     /// Сколько файлов обрабатывать одновременно (по умолчанию — по числу ядер).
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum GridArg {
+    Auto,
+    Fixed(Grid),
+}
+
+fn parse_grid(s: &str) -> Result<GridArg, String> {
+    if s.eq_ignore_ascii_case("auto") {
+        return Ok(GridArg::Auto);
+    }
+    let bad = || {
+        format!(
+            "ожидается auto или столбцы×строки, например 8x5 (до {0}x{0})",
+            Grid::MAX
+        )
+    };
+    let (c, r) = s.split_once(['x', 'X', '×', '*']).ok_or_else(bad)?;
+    let n = |v: &str| {
+        v.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=Grid::MAX).contains(n))
+    };
+    match (n(c), n(r)) {
+        (Some(cols), Some(rows)) => Ok(GridArg::Fixed(Grid { cols, rows })),
+        _ => Err(bad()),
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -306,7 +346,11 @@ struct Report {
     output: Option<String>,
     /// `ok`, `warning`, `skipped` или `error`.
     status: &'static str,
+    /// Размер файла; при нарезке — самого большого из клеток.
     tgs_bytes: Option<usize>,
+    /// При нарезке — все файлы клеток по порядку.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tiles: Vec<String>,
     warnings: Vec<Warning>,
     /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`, `write_failed`.
     error: Option<&'static str>,
@@ -314,12 +358,13 @@ struct Report {
     error_text: Option<String>,
 }
 
-fn process(src: &Path, dst: Option<&Path>, options: &Options) -> Report {
+fn process(src: &Path, dst: Option<&Path>, options: &Options, grid: Option<GridArg>) -> Report {
     let mut report = Report {
         input: src.display().to_string(),
         output: dst.map(|d| d.display().to_string()),
         status: "error",
         tgs_bytes: None,
+        tiles: Vec::new(),
         warnings: Vec::new(),
         error: None,
         error_text: None,
@@ -336,8 +381,17 @@ fn process(src: &Path, dst: Option<&Path>, options: &Options) -> Report {
             return report;
         }
     };
-    let conv = match svg2tgs_core::convert(&svg, options) {
-        Ok(c) => c,
+    let mut options = options.clone();
+    match grid {
+        None => {}
+        Some(GridArg::Fixed(g)) => options.grid = Some(g),
+        Some(GridArg::Auto) => {
+            options.grid = Some(Grid { cols: 1, rows: 1 });
+            options.grid_auto = true;
+        }
+    }
+    let tiles = match svg2tgs_core::convert_grid(&svg, &options) {
+        Ok(c) => c.tiles,
         Err(e) => {
             report.error = Some(match e {
                 svg2tgs_core::Error::InvalidSvg(_) => "invalid_svg",
@@ -348,19 +402,50 @@ fn process(src: &Path, dst: Option<&Path>, options: &Options) -> Report {
             return report;
         }
     };
-    if let Err(e) = std::fs::write(dst, &conv.tgs) {
-        report.error = Some("write_failed");
-        report.error_text = Some(format!("не удалось записать результат: {e}"));
-        return report;
+    let paths = tile_paths(dst, tiles.len());
+    for (path, conv) in paths.iter().zip(&tiles) {
+        if let Err(e) = std::fs::write(path, &conv.tgs) {
+            report.error = Some("write_failed");
+            report.error_text = Some(format!("не удалось записать результат: {e}"));
+            return report;
+        }
     }
-    let warn = conv
+    if tiles.len() > 1 {
+        report.tiles = paths.iter().map(|p| p.display().to_string()).collect();
+        report.output = Some(format!(
+            "{} … {}",
+            paths[0].display(),
+            paths[paths.len() - 1].display()
+        ));
+    }
+    // Замечания клеток — без повторов.
+    for conv in &tiles {
+        for w in &conv.warnings {
+            if !report.warnings.contains(w) {
+                report.warnings.push(w.clone());
+            }
+        }
+    }
+    let warn = report
         .warnings
         .iter()
         .any(|w| w.code.severity() == Severity::Warning);
     report.status = if warn { "warning" } else { "ok" };
-    report.tgs_bytes = Some(conv.tgs_bytes());
-    report.warnings = conv.warnings;
+    report.tgs_bytes = tiles.iter().map(|c| c.tgs_bytes()).max();
     report
+}
+
+/// Пути файлов клеток: `имя.tgs` → `имя_01.tgs`, `имя_02.tgs`… (номер —
+/// с нулями до общей длины); без нарезки — сам `dst`.
+fn tile_paths(dst: &Path, n: usize) -> Vec<PathBuf> {
+    if n <= 1 {
+        return vec![dst.to_path_buf()];
+    }
+    let stem = dst.file_stem().unwrap_or_default().to_string_lossy();
+    let digits = n.to_string().len().max(2);
+    (1..=n)
+        .map(|i| dst.with_file_name(format!("{stem}_{i:0digits$}.tgs")))
+        .collect()
 }
 
 /// Консоль Windows по умолчанию не в UTF-8: без этого кириллица
@@ -406,7 +491,8 @@ fn main() -> ExitCode {
         flip_v: cli.flip_v,
         rotation: cli.rotate,
         aspect: cli.aspect / 100.0,
-        crop: cli.crop.unwrap_or_default(),
+        crop: cli.crop,
+        background_clip: !cli.no_bg_clip,
         background: cli
             .bg
             .clone()
@@ -452,7 +538,7 @@ fn main() -> ExitCode {
                 if i >= files.len() {
                     break;
                 }
-                let r = process(&files[i], outputs[i].as_deref(), &options);
+                let r = process(&files[i], outputs[i].as_deref(), &options, cli.grid);
                 **slots[i].lock().unwrap() = Some(r);
             });
         }
@@ -532,6 +618,23 @@ fn print_human(reports: &[Report], options: &Options) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_argument_and_tile_names() {
+        assert_eq!(parse_grid("auto"), Ok(GridArg::Auto));
+        assert_eq!(
+            parse_grid("8x5"),
+            Ok(GridArg::Fixed(Grid { cols: 8, rows: 5 }))
+        );
+        assert!(parse_grid("0x5").is_err());
+        assert!(parse_grid("8").is_err());
+        let names: Vec<String> = tile_paths(Path::new("out/heart.tgs"), 12)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "heart_01.tgs");
+        assert_eq!(names[11], "heart_12.tgs");
+    }
 
     #[test]
     fn same_names_from_different_folders_get_numbers() {

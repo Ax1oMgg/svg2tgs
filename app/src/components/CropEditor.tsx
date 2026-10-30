@@ -13,33 +13,53 @@ interface Props {
   onDone: () => void;
 }
 
-const NO_CROP: Crop = { top: 0, right: 0, bottom: 0, left: 0 };
-/** Наименьший остаток рисунка после обрезки, доля стороны. */
+/** Наименьший остаток рисунка после обрезки, доля стороны (как в ядре). */
 const MIN_KEEP = 0.05;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
-/** Рамка рисунка после отражения, поворота и пропорций (как в ядре, placement.rs). */
+/** Прямоугольник `[x0, y0, x1, y1]` относительно центра рисунка. */
+type Rect = [number, number, number, number];
+
+/**
+ * Рамка рисунка после отражения, пропорций и поворота (как в ядре,
+ * placement.rs): пропорции — до поворота. Возвращает ширину и высоту.
+ */
 function shapeBounds(w: number, h: number, o: Options): [number, number] {
   const a = ((o.rotation ?? 0) * Math.PI) / 180;
   const k = o.aspect ?? 1;
-  let x0 = Infinity;
-  let x1 = -Infinity;
-  let y0 = Infinity;
-  let y1 = -Infinity;
+  let x1 = 0;
+  let y1 = 0;
   for (const [px, py] of [
-    [-w / 2, -h / 2],
     [w / 2, -h / 2],
     [w / 2, h / 2],
-    [-w / 2, h / 2],
   ]) {
-    const x = (px * Math.cos(a) - py * Math.sin(a)) * k;
-    const y = px * Math.sin(a) + py * Math.cos(a);
-    x0 = Math.min(x0, x);
-    x1 = Math.max(x1, x);
-    y0 = Math.min(y0, y);
-    y1 = Math.max(y1, y);
+    x1 = Math.max(x1, Math.abs(px * k * Math.cos(a) - py * Math.sin(a)));
+    y1 = Math.max(y1, Math.abs(px * k * Math.sin(a) + py * Math.cos(a)));
   }
-  return [x1 - x0, y1 - y0];
+  return [2 * x1, 2 * y1];
+}
+
+/** Рамка обрезки в единицах рисунка (как в ядре): от рамки без поворота
+ *  `w0 × h0`, не шире повёрнутого рисунка `bw × bh`. */
+function frameOf(crop: Crop | null | undefined, w0: number, h0: number, bw: number, bh: number): Rect {
+  if (!crop) return [-bw / 2, -bh / 2, bw / 2, bh / 2];
+  return [
+    Math.max(-bw / 2, -w0 / 2 + crop.left * w0),
+    Math.max(-bh / 2, -h0 / 2 + crop.top * h0),
+    Math.min(bw / 2, w0 / 2 - crop.right * w0),
+    Math.min(bh / 2, h0 / 2 - crop.bottom * h0),
+  ];
+}
+
+/** Обратно: рамка → отступы от рамки без поворота. */
+function cropOf(r: Rect, w0: number, h0: number): Crop {
+  const k = (v: number) => Math.round(v * 10000) / 10000;
+  return {
+    left: k((r[0] + w0 / 2) / w0),
+    top: k((r[1] + h0 / 2) / h0),
+    right: k((w0 / 2 - r[2]) / w0),
+    bottom: k((h0 / 2 - r[3]) / h0),
+  };
 }
 
 type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw" | "move" | "rotate";
@@ -47,7 +67,9 @@ type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw" | "move" | "rota
 /**
  * Кадрирование мышью в превью: рамка с ручками по краям и углам — обрезать,
  * перетаскивание внутри рамки — сдвинуть её, кружок сверху — повернуть.
- * Alt — точнее, Shift при повороте — шаг 15°. Правки сразу уходят в настройки.
+ * Рамка стоит на месте при повороте — поворачивается рисунок под ней.
+ * Alt или Ctrl — точнее, Shift при повороте — шаг 15°. Правки сразу уходят
+ * в настройки.
  */
 export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
   const t = strings[lang];
@@ -55,7 +77,7 @@ export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
   const [side, setSide] = useState(360);
   const [image, setImage] = useState<string | null>(null);
   const [size, setSize] = useState<[number, number] | null>(null);
-  const drag = useRef<{ handle: Handle; crop: Crop; rotation: number; angle: number; acc: number } | null>(null);
+  const drag = useRef<{ handle: Handle; rect: Rect; rotation: number; angle: number; acc: number } | null>(null);
 
   useEffect(() => {
     void backend.preview(id, "source", 512).then(setImage);
@@ -70,23 +92,26 @@ export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  const crop = options.crop ?? NO_CROP;
   const rotation = options.rotation ?? 0;
   const [w, h] = size ?? [1, 1];
+  const k = options.aspect ?? 1;
+  const [w0, h0] = [w * k, h];
   const [bw, bh] = shapeBounds(w, h, options);
   const f = side / Math.max(bw, bh);
   // Рамка рисунка (до обрезки) в пикселях сцены, по центру.
   const box = { w: bw * f, h: bh * f };
+  const rect = frameOf(options.crop, w0, h0, bw, bh);
   const frame = {
-    left: crop.left * box.w,
-    top: crop.top * box.h,
-    width: (1 - crop.left - crop.right) * box.w,
-    height: (1 - crop.top - crop.bottom) * box.h,
+    left: (rect[0] + bw / 2) * f,
+    top: (rect[1] + bh / 2) * f,
+    width: (rect[2] - rect[0]) * f,
+    height: (rect[3] - rect[1]) * f,
   };
   const square = Math.max(w, h) * f;
   const fx = options.flip_h ? -1 : 1;
   const fy = options.flip_v ? -1 : 1;
-  const imgTransform = `translate(-50%, -50%) scale(${options.aspect ?? 1}, 1) rotate(${rotation}deg) scale(${fx}, ${fy})`;
+  // CSS применяет справа налево: отразить → пропорции → повернуть.
+  const imgTransform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${k}, 1) scale(${fx}, ${fy})`;
 
   const start = (handle: Handle) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -94,20 +119,20 @@ export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const r = stage.current!.getBoundingClientRect();
     const angle = Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2));
-    drag.current = { handle, crop: { ...crop }, rotation, angle, acc: 0 };
+    drag.current = { handle, rect: [...rect], rotation, angle, acc: 0 };
   };
 
   const move = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) return;
-    const k = precision(e) < 1 ? 0.1 : 1;
+    const slow = precision(e);
     if (d.handle === "rotate") {
       const r = stage.current!.getBoundingClientRect();
       const angle = Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2));
       let delta = angle - d.angle;
       if (delta > Math.PI) delta -= 2 * Math.PI;
       if (delta < -Math.PI) delta += 2 * Math.PI;
-      d.acc += (delta * 180) / Math.PI * k;
+      d.acc += ((delta * 180) / Math.PI) * slow;
       d.angle = angle;
       let next = d.rotation + d.acc;
       next = ((((next + 180) % 360) + 360) % 360) - 180;
@@ -115,25 +140,27 @@ export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
       onOptions({ rotation: Math.round(next * 10) / 10 });
       return;
     }
-    const dx = (e.movementX / box.w) * k;
-    const dy = (e.movementY / box.h) * k;
-    const c = { ...d.crop };
-    const h_ = d.handle;
-    if (h_ === "move") {
-      const mx = clamp(dx, -c.left, c.right);
-      const my = clamp(dy, -c.top, c.bottom);
-      c.left += mx;
-      c.right -= mx;
-      c.top += my;
-      c.bottom -= my;
+    const dx = (e.movementX / f) * slow;
+    const dy = (e.movementY / f) * slow;
+    const [x0, y0, x1, y1] = d.rect;
+    const minW = MIN_KEEP * bw;
+    const minH = MIN_KEEP * bh;
+    let next: Rect;
+    if (d.handle === "move") {
+      const mx = clamp(dx, -bw / 2 - x0, bw / 2 - x1);
+      const my = clamp(dy, -bh / 2 - y0, bh / 2 - y1);
+      next = [x0 + mx, y0 + my, x1 + mx, y1 + my];
     } else {
-      if (h_.includes("w")) c.left = clamp(c.left + dx, 0, 1 - MIN_KEEP - c.right);
-      if (h_.includes("e")) c.right = clamp(c.right - dx, 0, 1 - MIN_KEEP - c.left);
-      if (h_.includes("n")) c.top = clamp(c.top + dy, 0, 1 - MIN_KEEP - c.bottom);
-      if (h_.includes("s")) c.bottom = clamp(c.bottom - dy, 0, 1 - MIN_KEEP - c.top);
+      const hd = d.handle;
+      next = [
+        hd.includes("w") ? clamp(x0 + dx, -bw / 2, x1 - minW) : x0,
+        hd.includes("n") ? clamp(y0 + dy, -bh / 2, y1 - minH) : y0,
+        hd.includes("e") ? clamp(x1 + dx, x0 + minW, bw / 2) : x1,
+        hd.includes("s") ? clamp(y1 + dy, y0 + minH, bh / 2) : y1,
+      ];
     }
-    d.crop = c;
-    onOptions({ crop: c });
+    d.rect = next;
+    onOptions({ crop: cropOf(next, w0, h0) });
   };
 
   const end = () => (drag.current = null);
@@ -147,7 +174,7 @@ export function CropEditor({ lang, id, options, onOptions, onDone }: Props) {
         <button
           type="button"
           className="btn btn--text btn--sm crop__reset"
-          onClick={() => onOptions({ crop: NO_CROP, rotation: 0 })}
+          onClick={() => onOptions({ crop: null, rotation: 0 })}
         >
           {t.cropResetAll}
         </button>

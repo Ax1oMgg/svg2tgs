@@ -72,7 +72,12 @@ pub enum Bounds {
     Content,
 }
 
-/// Обрезка краёв рисунка, доли стороны (после отражения, поворота и пропорций).
+/// Рамка обрезки. Края — отступы внутрь от рамки рисунка **без поворота**
+/// (после отражения и пропорций), доли её ширины (`left`, `right`) и высоты
+/// (`top`, `bottom`). Рамка стоит относительно центра рисунка и при повороте
+/// не двигается: поворачивается рисунок под ней. Отступ может быть
+/// отрицательным — рамка шире рисунка без поворота (у повёрнутого рисунка
+/// углы выступают). Всё, что вне рамки, отрезается.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Crop {
@@ -80,6 +85,55 @@ pub struct Crop {
     pub right: f32,
     pub bottom: f32,
     pub left: f32,
+}
+
+/// Нарезка на эмодзи: рисунок раскладывается на сетку `cols × rows`,
+/// каждая клетка — отдельный файл с канвасом пресета.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grid {
+    pub cols: u32,
+    pub rows: u32,
+}
+
+impl Grid {
+    /// Наибольшее число столбцов и строк.
+    pub const MAX: u32 = 20;
+
+    /// Столбцов для автоматической сетки: столько эмодзи клиенты Telegram
+    /// показывают в ряд (панель эмодзи), и картинка собирается без переносов.
+    /// Это практика клиентов, в документации Telegram числа нет.
+    pub const AUTO_COLS: u32 = 8;
+
+    /// Столбцы и строки в пределах 1…[`Grid::MAX`].
+    pub fn clamped(self) -> Self {
+        Self {
+            cols: self.cols.clamp(1, Self::MAX),
+            rows: self.rows.clamp(1, Self::MAX),
+        }
+    }
+
+    /// Сетка по пропорциям рисунка `aspect` (ширина / высота), не больше
+    /// `max_cols` столбцов: из вариантов с самым близким соотношением сторон
+    /// берётся самый крупный.
+    pub fn auto(aspect: f32, max_cols: u32) -> Self {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect as f64
+        } else {
+            1.0
+        };
+        let mut best = (1, 1, f64::MAX);
+        for c in 1..=max_cols.clamp(1, Self::MAX) {
+            let r = ((c as f64 / aspect).round() as u32).clamp(1, Self::MAX);
+            let err = ((c as f64 / r as f64) / aspect).ln().abs();
+            if err < best.2 - 1e-9 || (err - best.2).abs() <= 1e-9 && c > best.0 {
+                best = (c, r, err);
+            }
+        }
+        Self {
+            cols: best.0,
+            rows: best.1,
+        }
+    }
 }
 
 /// Фон под рисунком.
@@ -146,12 +200,21 @@ pub struct Options {
     pub rotation: f32,
     /// Пропорции: растяжение по ширине относительно высоты (1 — без искажения).
     pub aspect: f32,
-    pub crop: Crop,
+    /// Рамка обрезки; `None` — рисунок целиком.
+    pub crop: Option<Crop>,
     pub background: Background,
     /// Скругление углов фона, пиксели канваса (0 — прямые углы).
     pub background_radius: f32,
     /// Рамка фона внутри канваса; `None` — без рамки.
     pub background_border: Option<Outline>,
+    /// Обрезать рисунок и его обводку по скруглённой рамке фона (по внутреннему
+    /// краю рамки фона, если она есть). Действует, только когда фон виден.
+    pub background_clip: bool,
+    /// Нарезка на эмодзи; `None` — один файл.
+    pub grid: Option<Grid>,
+    /// Сетка нарезки подбирается по пропорциям рисунка (см. [`Grid::auto`]),
+    /// `grid` тогда задаёт только, что нарезка включена.
+    pub grid_auto: bool,
     /// Обводка вокруг рисунка; `None` — без обводки.
     pub outline: Option<Outline>,
     pub optimization: Optimization,
@@ -175,10 +238,13 @@ impl Default for Options {
             flip_v: false,
             rotation: 0.0,
             aspect: 1.0,
-            crop: Crop::default(),
+            crop: None,
             background: Background::default(),
             background_radius: 0.0,
             background_border: None,
+            background_clip: true,
+            grid: None,
+            grid_auto: false,
             outline: None,
             optimization: Optimization::default(),
             canvas_size: None,
@@ -201,6 +267,11 @@ impl Options {
     pub fn effective_duration_secs(&self) -> f32 {
         self.duration_secs
             .unwrap_or_else(|| self.preset.duration_secs())
+    }
+
+    /// Сетка нарезки в допустимых пределах; 1 × 1 — то же, что без нарезки.
+    pub fn grid(&self) -> Grid {
+        self.grid.map_or(Grid { cols: 1, rows: 1 }, Grid::clamped)
     }
 
     /// Толщина обводки, если она включена и видна.

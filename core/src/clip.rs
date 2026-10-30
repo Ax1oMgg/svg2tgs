@@ -38,6 +38,13 @@ pub fn rect(r: [f64; 4]) -> Contours {
     vec![vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]]
 }
 
+/// Область, сдвинутая на `(dx, dy)`.
+pub fn translate(c: &Contours, dx: f64, dy: f64) -> Contours {
+    c.iter()
+        .map(|contour| contour.iter().map(|p| [p[0] + dx, p[1] + dy]).collect())
+        .collect()
+}
+
 /// Спрямляет кривые Lottie в многоугольники. Каждый подпуть замыкается —
 /// так заливка трактует и открытые подпути.
 pub fn flatten(beziers: &[Bezier]) -> Contours {

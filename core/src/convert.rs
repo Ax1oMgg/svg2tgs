@@ -72,32 +72,17 @@ impl Converter {
     }
 
     /// Обходит дерево, начиная с корня, с матрицей размещения на канвасе.
-    /// Всё, что выходит за видимую область `clip` (она внутри канваса),
+    /// Всё, что выходит за видимую область `area` (она внутри канваса),
     /// обрезается: по правилам Telegram объекты не должны выходить за канвас.
-    pub fn run(&mut self, root: &Group, fit: Transform, clip: [f64; 4], canvas: f64) {
-        // Допуск 1 px — только у краёв, совпадающих с краем канваса: выход
-        // за край на доли пикселя (сглаживание, контрольные точки) не виден,
-        // а обрезка спрямляет кривые. Внутри канваса край обрезки точный.
-        let slack = |v: f64, edge: f64, out: f64| if (v - edge).abs() < 0.5 { v + out } else { v };
-        let clip = [
-            slack(clip[0], 0.0, -1.0),
-            slack(clip[1], 0.0, -1.0),
-            slack(clip[2], canvas, 1.0),
-            slack(clip[3], canvas, 1.0),
-        ];
+    pub fn run(&mut self, root: &Group, fit: Transform, area: Area) {
         let ctx = Ctx {
             matrix: fit,
             opacity: 1.0,
             layer_key: Vec::new(),
-            clip: Rc::new(Area::from_rect(clip)),
+            clip: Rc::new(area),
             layer_opacity: None,
         };
         self.walk_group_children(root, &ctx);
-    }
-
-    /// Есть ли хоть один нарисованный элемент.
-    pub fn is_empty(&self) -> bool {
-        self.layers.iter().all(|l| l.items.is_empty())
     }
 
     fn warn(&mut self, code: WarningCode, id: &str) {

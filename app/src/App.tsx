@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as backend from "./backend";
 import { EmptyState } from "./components/EmptyState";
 import { ExportPanel, type Scope } from "./components/ExportPanel";
@@ -11,7 +11,19 @@ import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
 import { strings } from "./i18n";
 import { exportName, exportSubfolder, loadPrefs, savePrefs, type Prefs } from "./prefs";
-import { SECTION_KEYS, sameKeys, type Existing, type SectionId, type Options, type SaveRequest, type Saved } from "./types";
+import {
+  DEFAULT_OPTIONS,
+  GRID_KEYS,
+  OWN_KEYS,
+  SECTION_KEYS,
+  sameKeys,
+  type Existing,
+  type FileItem,
+  type Options,
+  type SaveRequest,
+  type Saved,
+  type SectionId,
+} from "./types";
 import { effectiveOptions, useFiles } from "./useFiles";
 import "./App.css";
 
@@ -28,11 +40,36 @@ const UNDO_MS = 6000;
 /** Папка файла по его пути (оба вида разделителей). */
 const dirname = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
 
+/** Ключи настроек, которые различаются у `a` и `b`. */
+const changedKeys = (a: Options, b: Options) =>
+  (Object.keys({ ...a, ...b }) as (keyof Options)[]).filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+
+/** Меняют ли настройки сам рисунок (для подписи «Модифицированный SVG»). */
+const DRAWING_KEYS = [
+  ...SECTION_KEYS.position,
+  ...SECTION_KEYS.transform,
+  ...SECTION_KEYS.style,
+  ...SECTION_KEYS.background,
+  ...GRID_KEYS,
+] as (keyof Options)[];
+
+/** Снимок настроек для Ctrl+Z: общие и свои у каждого файла. */
+interface Snapshot {
+  global: Options;
+  own: [string, Options | undefined][];
+}
+/** Правки чаще этого склеиваются в один шаг отмены (перетаскивание ползунка). */
+const UNDO_GROUP_MS = 600;
+const UNDO_DEPTH = 100;
+
 export function App() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const patch = (p: Partial<Prefs>) => setPrefs((old) => ({ ...old, ...p }));
-  const { items, add, remove, clear, setItemOptions } = useFiles(prefs.options);
+  const { items, add, remove, clear, setItemOptions, setOptionsFor } = useFiles(prefs.options);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Выбранные файлы (Ctrl/Shift в списке); `selectedId` — главный из них.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const anchor = useRef<string | null>(null);
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -114,24 +151,129 @@ export function App() {
     if (items.length === 0) setSelectedId(null);
     else if (!items.some((it) => it.id === selectedId)) setSelectedId(items[0].id);
   }, [items, selectedId]);
+  // Выбор — только среди файлов списка, главный — всегда в выборе.
+  useEffect(() => {
+    setSelectedIds((old) => {
+      const ids = new Set([...old].filter((id) => items.some((it) => it.id === id)));
+      if (selectedId) ids.add(selectedId);
+      return ids.size === old.size && [...ids].every((id) => old.has(id)) ? old : ids;
+    });
+  }, [items, selectedId]);
+
+  const onSelect = (id: string, how: { add: boolean; range: boolean }, shown: string[]) => {
+    if (how.range && anchor.current && shown.includes(anchor.current)) {
+      const [a, b] = [shown.indexOf(anchor.current), shown.indexOf(id)].sort((x, y) => x - y);
+      setSelectedIds(new Set(shown.slice(a, b + 1)));
+      setSelectedId(id);
+      return;
+    }
+    anchor.current = id;
+    if (how.add) {
+      const next = new Set(selectedIds);
+      if (next.has(id) && next.size > 1) {
+        next.delete(id);
+        if (id === selectedId) setSelectedId([...next][0]);
+      } else {
+        next.add(id);
+        setSelectedId(id);
+      }
+      setSelectedIds(next);
+      return;
+    }
+    setSelectedIds(new Set([id]));
+    setSelectedId(id);
+  };
 
   const selected = items.find((it) => it.id === selectedId) ?? null;
-  const ready = useMemo(() => items.filter((it) => it.status === "ok" || it.status === "warn"), [items]);
+  const chosen = items.filter((it) => selectedIds.has(it.id));
 
-  // Панель правит общие настройки или свои настройки выбранного файла.
+  /* --------------------------- Отмена правок --------------------------- */
+  const snapshot = (): Snapshot => ({
+    global: prefs.options,
+    own: items.map((it) => [it.id, it.options]),
+  });
+  const history = useRef<{ undo: Snapshot[]; redo: Snapshot[]; last: number }>({ undo: [], redo: [], last: 0 });
+  /** Запомнить состояние перед правкой (частые правки — один шаг). */
+  const remember = () => {
+    const h = history.current;
+    const now = Date.now();
+    if (now - h.last > UNDO_GROUP_MS) {
+      h.undo.push(snapshot());
+      if (h.undo.length > UNDO_DEPTH) h.undo.shift();
+      h.redo = [];
+    }
+    h.last = now;
+  };
+  const restore = (s: Snapshot) => {
+    patch({ options: s.global });
+    const known = new Set(items.map((it) => it.id));
+    const own = s.own.filter(([id]) => known.has(id));
+    const changed = own.filter(([id, o]) => items.find((it) => it.id === id)?.options !== o);
+    setOptionsFor(changed);
+  };
+  const undo = () => {
+    const h = history.current;
+    const s = h.undo.pop();
+    if (!s) return;
+    h.redo.push(snapshot());
+    h.last = 0;
+    restore(s);
+  };
+  const redo = () => {
+    const h = history.current;
+    const s = h.redo.pop();
+    if (!s) return;
+    h.undo.push(snapshot());
+    h.last = 0;
+    restore(s);
+  };
+  const undoRef = useRef({ undo, redo });
+  undoRef.current = { undo, redo };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== "z" && key !== "y" && e.code !== "KeyZ" && e.code !== "KeyY") return;
+      // В текстовых полях — их собственная отмена.
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && (el as HTMLInputElement).type === "text"))) return;
+      e.preventDefault();
+      const isRedo = e.code === "KeyY" || key === "y" || e.shiftKey;
+      if (isRedo) undoRef.current.redo();
+      else undoRef.current.undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Панель правит общие настройки или свои настройки выбранных файлов.
   const scope: Scope = selected?.options ? "one" : "all";
   const panelOptions = selected ? effectiveOptions(selected, prefs.options) : prefs.options;
+  /** Правка панели уходит в выбранные файлы: изменённые ключи — в настройки
+   *  каждого из них (у одного файла — все настройки целиком). */
+  const applyToChosen = (o: Options) => {
+    if (chosen.length <= 1 && selected) return setItemOptions(selected.id, o);
+    const keys = changedKeys(panelOptions, o);
+    setOptionsFor(
+      chosen.map((it) => {
+        const own: Options = { ...effectiveOptions(it, prefs.options) };
+        for (const k of keys) (own as unknown as Record<string, unknown>)[k] = o[k];
+        return [it.id, own];
+      }),
+    );
+  };
   const onPanelOptions = (o: Options) => {
-    if (scope === "one" && selected) return setItemOptions(selected.id, o);
-    // Трансформация почти всегда своя у каждого файла: если файлов несколько
-    // и правится трансформация, правка уходит только в выбранный файл,
-    // у него появляются свои настройки, а уведомление позволяет отменить.
-    if (selected && items.length > 1 && !sameKeys(o, prefs.options, SECTION_KEYS.transform)) {
-      const id = selected.id;
-      setItemOptions(id, o);
+    remember();
+    if (scope === "one" && selected) return applyToChosen(o);
+    // Трансформация и положение X/Y почти всегда свои у каждого рисунка:
+    // если файлов несколько и правятся они, правка уходит только в выбранные
+    // файлы, у них появляются свои настройки, а уведомление позволяет отменить.
+    if (selected && items.length > 1 && !sameKeys(o, prefs.options, OWN_KEYS)) {
+      const ids = chosen.length > 0 ? chosen.map((it) => it.id) : [selected.id];
+      applyToChosen(o);
       setToast({
-        text: t.ownSettingsToast(selected.name),
-        action: { label: t.undo, run: () => setItemOptions(id, undefined) },
+        text: chosen.length > 1 ? t.ownSettingsToastMany(chosen.length) : t.ownSettingsToast(selected.name),
+        action: { label: t.undo, run: () => setOptionsFor(ids.map((id) => [id, undefined])) },
         timeout: UNDO_MS,
       });
       return;
@@ -140,13 +282,38 @@ export function App() {
   };
   const onScope = (s: Scope) => {
     if (!selected || s === scope) return;
-    setItemOptions(selected.id, s === "one" ? { ...prefs.options } : undefined);
+    remember();
+    const targets = chosen.length > 0 ? chosen : [selected];
+    setOptionsFor(targets.map((it) => [it.id, s === "one" ? { ...prefs.options } : undefined]));
   };
+  /** Изменён ли рисунок настройками (по сравнению с «как есть»). */
+  const modified = !sameKeys(panelOptions, DEFAULT_OPTIONS, DRAWING_KEYS);
 
-  const runExport = async () => {
-    if (ready.length === 0) return;
+  // Для ожидания конвертации при экспорте — всегда свежий список.
+  const itemsRef = useRef<FileItem[]>(items);
+  itemsRef.current = items;
+
+  /**
+   * Экспорт файлов `ids`: сначала дожидается конвертации, файлы с ошибкой
+   * пропускает (и сообщает, сколько), про уже существующие — спрашивает.
+   */
+  const runExport = async (ids: string[]) => {
+    if (ids.length === 0) return;
     setExporting(true);
     try {
+      const pick = () => itemsRef.current.filter((it) => ids.includes(it.id));
+      if (pick().some((it) => it.status === "pending")) {
+        setToast({ text: t.exportWait });
+        while (pick().some((it) => it.status === "pending")) await new Promise((r) => setTimeout(r, 150));
+        setToast(null);
+      }
+      const list = pick();
+      const ready = list.filter((it) => it.status === "ok" || it.status === "warn");
+      const broken = list.length - ready.length;
+      if (ready.length === 0) {
+        setToast({ text: [t.saved(0), t.exportErrors(broken)].join(", ") });
+        return;
+      }
       const ex = prefs.export;
       // SVG из буфера лежит не в папке: если папка экспорта не задана,
       // для таких файлов её нужно выбрать.
@@ -183,9 +350,12 @@ export function App() {
       setConflict(null);
       const results: Saved[] = await backend.save(requests);
       const n = (s: Saved["status"]) => results.filter((r) => r.status === s).length;
-      const parts = [t.saved(n("saved"))];
+      // Сохранено — файлов, с нарезкой это все клетки.
+      const files = results.filter((r) => r.status === "saved").reduce((sum, r) => sum + Math.max(1, r.count ?? 1), 0);
+      const parts = [t.saved(files)];
       if (n("skipped")) parts.push(t.skipped(n("skipped")));
       if (n("failed")) parts.push(t.failed(n("failed")));
+      if (broken) parts.push(t.exportErrors(broken));
       // «Открыть папку» — когда всё легло в одну папку.
       const folders = new Set(results.filter((r) => r.path).map((r) => dirname(r.path!)));
       const folder = folders.size === 1 && backend.isTauri() ? [...folders][0] : null;
@@ -207,17 +377,21 @@ export function App() {
       lang={prefs.lang}
       options={panelOptions}
       onOptions={onPanelOptions}
+      resetTo={scope === "one" ? prefs.options : DEFAULT_OPTIONS}
       scope={scope}
       onScope={onScope}
       selectedName={selected?.name ?? null}
+      selectedCount={Math.max(chosen.length, selected ? 1 : 0)}
+      actualGrid={selected?.outcome && !selected.outcome.error ? selected.outcome.grid : null}
       exportPrefs={prefs.export}
       onExportPrefs={(e) => patch({ export: e })}
       sections={sections}
       onSection={(id, open) => setSections((s) => ({ ...s, [id]: open }))}
       onCrop={() => selected && setCropping(true)}
-      readyCount={ready.length}
+      totalCount={items.length}
       exporting={exporting}
-      onExport={() => void runExport()}
+      onExport={() => void runExport(items.map((it) => it.id))}
+      onExportOne={selected && selected.status !== "error" ? () => void runExport([selected.id]) : null}
       onChooseDir={() =>
         void backend
           .pickFolder(prefs.export.dir ?? undefined)
@@ -247,9 +421,10 @@ export function App() {
             lang={prefs.lang}
             items={items}
             selectedId={selectedId}
+            selectedIds={selectedIds}
             onlyProblems={onlyProblems}
             onToggleProblems={setOnlyProblems}
-            onSelect={setSelectedId}
+            onSelect={onSelect}
             onRemove={(id) => remove([id])}
             onClear={clear}
             onAddFiles={addFiles}
@@ -258,7 +433,9 @@ export function App() {
           <Preview
             lang={prefs.lang}
             item={selected}
-            preset={panelOptions.preset}
+            kind={prefs.previewKind}
+            onKind={(previewKind) => patch({ previewKind })}
+            modified={modified}
             mode={prefs.previewMode}
             bg={prefs.previewBg}
             onMode={(previewMode) =>

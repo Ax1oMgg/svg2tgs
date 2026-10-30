@@ -146,28 +146,58 @@ pub fn render_tgs(tgs: &[u8], size: u32, frame: usize) -> Result<Image, RenderEr
     render_lottie(&json, size, frame)
 }
 
+/// Склеивает клетки нарезки (TGS по строкам слева направо) в одну картинку:
+/// клетка — `cell`×`cell` пикселей, вплотную, как эмодзи в строке Telegram.
+pub fn render_tgs_grid(tiles: &[Vec<u8>], cols: u32, cell: u32) -> Result<Image, RenderError> {
+    let cols = cols.max(1);
+    let rows = (tiles.len() as u32).div_ceil(cols).max(1);
+    let mut out = Image::new(cols * cell, rows * cell);
+    for (n, tgs) in tiles.iter().enumerate() {
+        let img = render_tgs(tgs, cell, 0)?;
+        let (cx, cy) = ((n as u32 % cols) * cell, (n as u32 / cols) * cell);
+        for y in 0..cell {
+            let src = (y * cell * 4) as usize;
+            let dst = (((cy + y) * out.width + cx) * 4) as usize;
+            let len = (cell * 4) as usize;
+            out.rgba[dst..dst + len].copy_from_slice(&img.rgba[src..src + len]);
+        }
+    }
+    Ok(out)
+}
+
 /// Рисует исходный SVG через resvg в тех же координатах, что и конвертер:
-/// канвас пресета, вписывание, отступы и фон из `options`, затем масштаб
-/// до `size`×`size`.
+/// канвас пресета (или весь холст сетки нарезки), вписывание, отступы, фон
+/// и обрезка по фону из `options`. Длинная сторона картинки — `size`.
 pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, RenderError> {
     if size == 0 || size > 4096 {
         return Err(RenderError::BadSize);
     }
     let tree = svg2tgs_core::parse_svg(svg)?;
-    let background = svg2tgs_core::background_plan(options)?;
-    let canvas = options.effective_canvas_size() as f32;
-    let placement = svg2tgs_core::place(svg2tgs_core::source_rect(&tree, options), canvas, options);
-    let k = size as f32 / canvas;
+    let grid = options.grid();
+    let tile = options.effective_canvas_size() as f32;
+    let (bw, bh) = svg2tgs_core::board_size(tile, grid);
+    let background = svg2tgs_core::background_plan_for(options, bw as f64, bh as f64)?;
+    let placement = svg2tgs_core::place(
+        svg2tgs_core::source_rect(&tree, options),
+        tile,
+        grid,
+        options,
+    );
+    let k = size as f32 / bw.max(bh);
+    let (iw, ih) = (
+        ((bw * k).round() as u32).max(1),
+        ((bh * k).round() as u32).max(1),
+    );
     let transform = tiny_skia::Transform::from_scale(k, k).pre_concat(placement.transform);
 
-    let mut pm = tiny_skia::Pixmap::new(size, size).expect("размер > 0");
+    let mut pm = tiny_skia::Pixmap::new(iw, ih).expect("размер > 0");
     draw_background(&mut pm, &background, k);
     // Рисунок — отдельно и поверх фона только внутри видимой области,
     // как в TGS (там лишнее обрезается геометрически).
-    let mut art = tiny_skia::Pixmap::new(size, size).expect("размер > 0");
+    let mut art = tiny_skia::Pixmap::new(iw, ih).expect("размер > 0");
     resvg::render(&tree, transform, &mut art.as_mut());
     let [x0, y0, x1, y1] = placement.clip.map(|v| v as f32 * k);
-    let mut mask = tiny_skia::Mask::new(size, size).expect("размер > 0");
+    let mut mask = tiny_skia::Mask::new(iw, ih).expect("размер > 0");
     if let Some(rect) = tiny_skia::Rect::from_ltrb(x0, y0, x1, y1) {
         let path = tiny_skia::PathBuilder::from_rect(rect);
         mask.fill_path(
@@ -176,6 +206,23 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
             true,
             tiny_skia::Transform::identity(),
         );
+    }
+    // Обрезка по фону: рамка — внутренний край рамки фона.
+    if options.background_clip && (background.fill.is_some() || background.border.is_some()) {
+        let inset = background.border.map_or(0.0, |(_, w)| w as f32) * k;
+        let r = background.radius as f32 * k - inset;
+        if let Some(frame) = rounded_rect(inset, inset, iw as f32 - inset, ih as f32 - inset, r) {
+            let mut fm = tiny_skia::Mask::new(iw, ih).expect("размер > 0");
+            fm.fill_path(
+                &frame,
+                tiny_skia::FillRule::Winding,
+                true,
+                tiny_skia::Transform::identity(),
+            );
+            for (m, f) in mask.data_mut().iter_mut().zip(fm.data()) {
+                *m = ((*m as u16 * *f as u16 + 127) / 255) as u8;
+            }
+        }
     }
     pm.draw_pixmap(
         0,
@@ -188,10 +235,10 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
     Ok(Image::from_pixmap(&pm))
 }
 
-/// Фон как в TGS: заливка и рамка — скруглённые квадраты на весь канвас
-/// (`k` — масштаб от канваса к картинке).
+/// Фон как в TGS: заливка и рамка — скруглённые прямоугольники на весь
+/// холст (`k` — масштаб от холста к картинке).
 fn draw_background(pm: &mut tiny_skia::Pixmap, plan: &svg2tgs_core::BackgroundPlan, k: f32) {
-    let side = pm.width() as f32;
+    let (w, h) = (pm.width() as f32, pm.height() as f32);
     let r = plan.radius as f32 * k;
     let mut paint = tiny_skia::Paint {
         anti_alias: true,
@@ -199,7 +246,7 @@ fn draw_background(pm: &mut tiny_skia::Pixmap, plan: &svg2tgs_core::BackgroundPl
     };
     if let Some([red, g, b]) = plan.fill {
         paint.set_color_rgba8(red, g, b, 255);
-        if let Some(path) = rounded_rect(0.0, 0.0, side, side, r) {
+        if let Some(path) = rounded_rect(0.0, 0.0, w, h, r) {
             pm.fill_path(
                 &path,
                 &paint,
@@ -209,12 +256,12 @@ fn draw_background(pm: &mut tiny_skia::Pixmap, plan: &svg2tgs_core::BackgroundPl
             );
         }
     }
-    if let Some(([red, g, b], w)) = plan.border {
-        let w = w as f32 * k;
+    if let Some(([red, g, b], bw)) = plan.border {
+        let bw = bw as f32 * k;
         paint.set_color_rgba8(red, g, b, 255);
         let mut pb = tiny_skia::PathBuilder::new();
-        for (inset, radius) in [(0.0, r), (w, r - w)] {
-            if let Some(p) = rounded_rect(inset, inset, side - inset, side - inset, radius) {
+        for (inset, radius) in [(0.0, r), (bw, r - bw)] {
+            if let Some(p) = rounded_rect(inset, inset, w - inset, h - inset, radius) {
                 pb.push_path(&p);
             }
         }

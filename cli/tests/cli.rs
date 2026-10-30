@@ -127,3 +127,40 @@ fn bad_arguments_are_explained() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("не найдены"));
 }
+
+#[test]
+fn grid_splits_into_numbered_emoji() {
+    let out_dir = tmp("grid");
+    let out = bin()
+        .arg(fixtures().join("shapes-basic.svg"))
+        .arg("-o")
+        .arg(&out_dir)
+        .args(["--grid", "3x2", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = json(&out);
+    assert_eq!(report[0]["tiles"].as_array().unwrap().len(), 6);
+    for n in 1..=6 {
+        assert!(out_dir.join(format!("shapes-basic_0{n}.tgs")).exists());
+    }
+    assert!(!out_dir.join("shapes-basic.tgs").exists());
+
+    // auto: по пропорциям, не больше 8 в ряд.
+    let auto_dir = tmp("grid-auto");
+    let out = bin()
+        .arg(fixtures().join("shapes-basic.svg"))
+        .arg("-o")
+        .arg(&auto_dir)
+        .args(["--grid", "auto", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let tiles = json(&out)[0]["tiles"].as_array().unwrap().len();
+    assert!(tiles > 1 && tiles <= 8 * 20, "{tiles}");
+}
