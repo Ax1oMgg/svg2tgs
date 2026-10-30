@@ -1,0 +1,36 @@
+# Dependabot сам предлагает PR с обновлениями. Шаги сборки закреплены
+# по хешам коммитов — он обновляет и хеш, и комментарий с версией.
+# Обновления собраны в группы, чтобы приходил один PR на экосистему, а не десяток.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "Сборка"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      rust:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "Rust"
+
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      npm:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "Интерфейс"
