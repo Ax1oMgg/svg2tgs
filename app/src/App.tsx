@@ -558,8 +558,9 @@ export function App() {
           version={version}
           tg={tg}
           onTg={setTg}
-          onApply={(lang, theme) => {
+          onApply={(lang, theme, tgEnabled) => {
             patch({ lang, theme });
+            if (tgEnabled !== tg.enabled) void backend.tgSetEnabled(tgEnabled).then(setTg);
             setSettingsOpen(false);
           }}
           onClose={() => setSettingsOpen(false)}

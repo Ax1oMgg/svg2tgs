@@ -420,7 +420,7 @@ fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
 
 /* ------------------------------ Выгрузка в Telegram ----------------------------- */
 
-use telegram::{PublishRequest, Status, Telegram, TgError};
+use telegram::{Access, PublishRequest, Status, Telegram, TgError};
 
 /// Ошибка фонового потока — как «прочий отказ».
 fn join_error(e: impl ToString) -> TgError {
@@ -442,11 +442,26 @@ fn tg_set_enabled(enabled: bool, tg: State<'_, Telegram>) -> Status {
     tg.set_enabled(enabled)
 }
 
+/// Откуда пришёл запрос на подключение: `settings` — из открытых «Настроек»
+/// с включённым (ещё не сохранённым) переключателем.
+fn access(settings: bool) -> Access {
+    if settings {
+        Access::Settings
+    } else {
+        Access::Saved
+    }
+}
+
 /// Проверить токен бота и запомнить его в системном хранилище.
 #[tauri::command]
-async fn tg_check_token(token: String, app: tauri::AppHandle) -> Result<Status, TgError> {
+async fn tg_check_token(
+    token: String,
+    settings: bool,
+    app: tauri::AppHandle,
+) -> Result<Status, TgError> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<Telegram>().check_token(&token, telegram::http)
+        app.state::<Telegram>()
+            .check_token(access(settings), &token, telegram::http)
     })
     .await
     .map_err(join_error)?
@@ -454,10 +469,13 @@ async fn tg_check_token(token: String, app: tauri::AppHandle) -> Result<Status, 
 
 /// Найти владельца по /start.
 #[tauri::command]
-async fn tg_find_owner(app: tauri::AppHandle) -> Result<Status, TgError> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<Telegram>().find_owner(telegram::http))
-        .await
-        .map_err(join_error)?
+async fn tg_find_owner(settings: bool, app: tauri::AppHandle) -> Result<Status, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Telegram>()
+            .find_owner(access(settings), telegram::http)
+    })
+    .await
+    .map_err(join_error)?
 }
 
 /// Забыть бота и токен.
@@ -491,7 +509,7 @@ async fn tg_publish(
         let job = telegram::build_job(&request, &bot_name, |id, tile| {
             items.get(id).and_then(|i| i.tiles.get(tile).cloned())
         })?;
-        let bot = tg.bot_with(None, telegram::http)?;
+        let bot = tg.bot_with(Access::Saved, None, telegram::http)?;
         telegram::reset_stop(&tg.stop);
         svg2tgs_publish::run(
             &bot,

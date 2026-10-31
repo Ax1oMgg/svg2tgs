@@ -198,11 +198,13 @@ export async function tgSetEnabled(enabled: boolean): Promise<TgStatus> {
   return { ...tgMock.status };
 }
 
-/** Проверить токен (сеть) и сохранить его в системном хранилище. */
-export async function tgCheckToken(token: string): Promise<TgStatus> {
-  if (isTauri()) return tgCall<TgStatus>("tg_check_token", { token });
+/** Проверить токен (сеть) и сохранить его в системном хранилище.
+ *  `settings` — из открытых «Настроек» с включённым переключателем
+ *  (до «Готово» Rust разрешает только это подключение). */
+export async function tgCheckToken(token: string, settings: boolean): Promise<TgStatus> {
+  if (isTauri()) return tgCall<TgStatus>("tg_check_token", { token, settings });
   await delay(600);
-  if (!tgMock.status.enabled) throw { code: "disabled" } as TgError;
+  if (!tgMock.status.enabled && !settings) throw { code: "disabled" } as TgError;
   if (!/^\d+:\S{6,}$/.test(token.trim())) throw { code: "invalid_token" } as TgError;
   tgMock.status = { ...tgMock.status, bot: "tea_stickers_bot", owner: null };
   tgMock.polls = 0;
@@ -210,8 +212,8 @@ export async function tgCheckToken(token: string): Promise<TgStatus> {
 }
 
 /** Найти владельца по /start (сеть). */
-export async function tgFindOwner(): Promise<TgStatus> {
-  if (isTauri()) return tgCall<TgStatus>("tg_find_owner");
+export async function tgFindOwner(settings: boolean): Promise<TgStatus> {
+  if (isTauri()) return tgCall<TgStatus>("tg_find_owner", { settings });
   await delay(300);
   if (++tgMock.polls >= 2) tgMock.status = { ...tgMock.status, owner: "@nickname" };
   return { ...tgMock.status };
