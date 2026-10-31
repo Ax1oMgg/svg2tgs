@@ -9,7 +9,7 @@
 | Linux (любой) | `svg2tgs_…_linux_amd64.AppImage` |
 | Командная строка | `svg2tgs-cli_…` для своей системы |
 
-Установка и первый запуск — в [README](https://github.com/Ax1oMgg/svg2tgs#установка).
+Установка и первый запуск — в [docs/INSTALL.md](https://github.com/Ax1oMgg/svg2tgs/blob/main/docs/INSTALL.md).
 Проверить файл: `SHA256SUMS.txt`.
 
 ## Изменения
