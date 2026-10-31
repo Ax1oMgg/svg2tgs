@@ -19,6 +19,10 @@ updates:
       interval: monthly
     open-pull-requests-limit: 3
     groups:
+      # usvg и resvg обновляются только вместе: resvg тянет usvg своей версии,
+      # и по отдельности типы ядра и рендера не сходятся.
+      resvg:
+        patterns: ["usvg", "resvg"]
       rust:
         update-types: [minor, patch]
     commit-message:
