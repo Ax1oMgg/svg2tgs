@@ -1,0 +1,16 @@
+[package]
+name = "svg2tgs-publish"
+description = "Выгрузка готовых TGS в набор стикеров или эмодзи Telegram через бота пользователя (Bot API)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+# Только rustls (без OpenSSL) и встроенные корневые сертификаты.
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }

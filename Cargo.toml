@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["core", "render", "cli", "app/src-tauri"]
-default-members = ["core", "render", "cli"]
+members = ["core", "render", "publish", "cli", "app/src-tauri"]
+default-members = ["core", "render", "publish", "cli"]
 
 [workspace.package]
 version = "0.1.7"
@@ -14,6 +14,7 @@ authors = ["Парамонов Григорий aka Ax1oMgg <chajnayaaxioma@gmai
 [workspace.dependencies]
 svg2tgs-core = { path = "core" }
 svg2tgs-render = { path = "render" }
+svg2tgs-publish = { path = "publish" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

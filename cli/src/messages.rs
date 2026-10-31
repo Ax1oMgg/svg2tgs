@@ -88,3 +88,36 @@ pub fn options_error(e: &svg2tgs_core::OptionsError) -> String {
         other => other.into(),
     }
 }
+
+/// Текст ошибки выгрузки в Telegram.
+pub fn publish_error(e: &svg2tgs_publish::PublishError) -> String {
+    use svg2tgs_publish::PublishError as E;
+    match e {
+        E::InvalidToken => "Telegram не принял токен бота — проверьте, что он скопирован целиком".into(),
+        E::NoOwner => "боту ещё никто не написал /start — напишите ему в Telegram и повторите (или укажите --user-id)".into(),
+        E::WebhookActive => "у бота включён webhook — отключите его (deleteWebhook) или укажите --user-id".into(),
+        E::NameInvalid { name } => format!(
+            "адрес «{name}» не подходит: только латиница, цифры и одиночные «_», начинается с буквы, до 64 символов"
+        ),
+        E::NameTaken { name } => format!(
+            "набор «{name}» уже есть — выберите другой адрес (--name) или дописывайте в него с --resume"
+        ),
+        E::TitleInvalid => "название — от 1 до 64 символов".into(),
+        E::Nothing => "нет файлов .tgs для выгрузки".into(),
+        E::TooMany { count, max } => format!("файлов {count}, а в набор помещается {max}"),
+        E::EmojiInvalid { index } => format!("у файла №{} нет эмодзи или их больше 20", index + 1),
+        E::SetMismatch { name, existing, planned } => format!(
+            "в наборе «{name}» уже {existing} шт., а выгружаем {planned} — похоже, это другой набор"
+        ),
+        E::SetFull { done } => format!("набор заполнен: в нём {done} шт."),
+        E::FileRejected { index, detail } => {
+            format!("Telegram не принял файл №{}: {detail}", index + 1)
+        }
+        E::Network { done, .. } => format!("нет связи с Telegram (выгружено {done})"),
+        E::Stopped { done } => format!("остановлено (выгружено {done})"),
+        E::Telegram { status, detail } => format!("Telegram ответил ошибкой {status}: {detail}"),
+        E::ReadFailed { index, detail } => {
+            format!("не удалось прочитать файл №{}: {detail}", index + 1)
+        }
+    }
+}
