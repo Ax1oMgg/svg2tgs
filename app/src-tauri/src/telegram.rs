@@ -81,6 +81,17 @@ impl From<PublishError> for TgError {
     }
 }
 
+/// Откуда запрос и что его разрешает.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// Обычная работа (выгрузка): только при сохранённом включении.
+    Saved,
+    /// Подключение бота в открытых «Настройках», где переключатель включён,
+    /// но ещё не сохранён «Готово»: проверка токена и поиск /start — явные
+    /// действия пользователя в этом окне.
+    Settings,
+}
+
 /// Состояние для интерфейса — без сети.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,14 +171,16 @@ impl Telegram {
         })
     }
 
-    /// Бот для запросов — только если выгрузка включена и есть токен.
-    /// `make` создаёт транспорт; при выключенной выгрузке он не вызывается.
+    /// Бот для запросов — только если выгрузка разрешена и есть токен.
+    /// `make` создаёт транспорт; без разрешения он не вызывается.
     pub fn bot_with<T: Transport>(
         &self,
+        access: Access,
         token: Option<&str>,
         make: impl FnOnce(&str) -> T,
     ) -> Result<Bot<T>, TgError> {
-        if !self.config.lock().unwrap().enabled {
+        let enabled = self.config.lock().unwrap().enabled;
+        if !enabled && access != Access::Settings {
             return Err(TgError::Disabled);
         }
         let saved;
@@ -184,11 +197,12 @@ impl Telegram {
     /// Проверить токен (`getMe`) и запомнить его. Владелец сбрасывается.
     pub fn check_token<T: Transport>(
         &self,
+        access: Access,
         token: &str,
         make: impl FnOnce(&str) -> T,
     ) -> Result<Status, TgError> {
         let token = token.trim();
-        let me = self.bot_with(Some(token), make)?.me()?;
+        let me = self.bot_with(access, Some(token), make)?.me()?;
         self.store
             .set(token)
             .map_err(|detail| TgError::Storage { detail })?;
@@ -201,9 +215,10 @@ impl Telegram {
     /// Найти владельца по /start (`getUpdates`).
     pub fn find_owner<T: Transport>(
         &self,
+        access: Access,
         make: impl FnOnce(&str) -> T,
     ) -> Result<Status, TgError> {
-        let owner = self.bot_with(None, make)?.find_owner()?;
+        let owner = self.bot_with(access, None, make)?.find_owner()?;
         Ok(match owner {
             Some(o) => self.update(|c| c.owner = Some(o)),
             None => self.status(),
@@ -323,7 +338,7 @@ mod tests {
                 "getUpdates" => Ok(serde_json::json!([{"message": {
                     "text": "/start", "chat": {"type": "private"},
                     "from": {"id": 7, "first_name": "Гриша", "username": "nickname"}}}])),
-                _ => Err(Failure::Unexpected),
+                _ => Err(Failure::Unexpected("test".into())),
             }
         }
     }
@@ -339,15 +354,48 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let m = made.clone();
         let c = calls.clone();
-        let r = t.check_token("123:abc", |_| {
+        let r = t.check_token(Access::Saved, "123:abc", |_| {
             m.fetch_add(1, Ordering::Relaxed);
             Counting(c)
         });
         assert_eq!(r, Err(TgError::Disabled));
         let c = calls.clone();
-        assert_eq!(t.find_owner(|_| Counting(c)), Err(TgError::Disabled));
+        assert_eq!(
+            t.find_owner(Access::Saved, |_| Counting(c)),
+            Err(TgError::Disabled)
+        );
         assert_eq!(made.load(Ordering::Relaxed), 0);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn settings_may_connect_before_done_but_publish_may_not() {
+        let t = tg();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        // Переключатель включён в окне, «Готово» ещё не нажата.
+        let s = t
+            .check_token(Access::Settings, "123:abc", |_| Counting(c))
+            .unwrap();
+        assert!(!s.enabled);
+        assert_eq!(s.bot.as_deref(), Some("tea_stickers_bot"));
+        let c = calls.clone();
+        assert_eq!(
+            t.find_owner(Access::Settings, |_| Counting(c))
+                .unwrap()
+                .owner
+                .as_deref(),
+            Some("@nickname")
+        );
+        // Выгрузка — только после сохранённого включения.
+        let c = calls.clone();
+        assert!(matches!(
+            t.bot_with(Access::Saved, None, |_| Counting(c)),
+            Err(TgError::Disabled)
+        ));
+        t.set_enabled(true);
+        let c = calls.clone();
+        assert!(t.bot_with(Access::Saved, None, |_| Counting(c)).is_ok());
     }
 
     #[test]
@@ -356,9 +404,12 @@ mod tests {
         t.set_enabled(true);
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
-        assert_eq!(t.find_owner(|_| Counting(c)), Err(TgError::NoToken));
+        assert_eq!(
+            t.find_owner(Access::Saved, |_| Counting(c)),
+            Err(TgError::NoToken)
+        );
         let c = calls.clone();
-        let s = t.check_token(" 123:abc \n", |tok| {
+        let s = t.check_token(Access::Saved, " 123:abc \n", |tok| {
             assert_eq!(tok, "123:abc");
             Counting(c)
         });
@@ -372,7 +423,7 @@ mod tests {
         );
         assert_eq!(t.store.get().as_deref(), Some("123:abc"));
         let c = calls.clone();
-        let s = t.find_owner(|tok| {
+        let s = t.find_owner(Access::Saved, |tok| {
             assert_eq!(tok, "123:abc");
             Counting(c)
         });
@@ -391,7 +442,8 @@ mod tests {
         let t = Telegram::load(Some(path.clone()), Box::new(Memory::default()));
         t.set_enabled(true);
         let c = Arc::new(AtomicUsize::new(0));
-        t.check_token("123:secret", |_| Counting(c)).unwrap();
+        t.check_token(Access::Saved, "123:secret", |_| Counting(c))
+            .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("secret"), "{text}");
         let again = Telegram::load(Some(path), Box::new(Memory::default()));

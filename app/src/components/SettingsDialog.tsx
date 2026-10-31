@@ -12,10 +12,11 @@ interface Props {
   lang: Lang;
   theme: Theme;
   version: string;
-  /** Выгрузка в Telegram: меняется сразу, без «Готово». */
+  /** Выгрузка в Telegram. Переключатель применяется «Готово», как язык
+   *  и тема; подключение бота (токен, /start) — сразу, это действия. */
   tg: TgStatus;
   onTg: (s: TgStatus) => void;
-  onApply: (lang: Lang, theme: Theme) => void;
+  onApply: (lang: Lang, theme: Theme, tgEnabled: boolean) => void;
   onClose: () => void;
 }
 
@@ -28,7 +29,8 @@ export function SettingsDialog({ lang, theme, version, tg, onTg, onApply, onClos
   const ref = useRef<HTMLDialogElement>(null);
   const [draftLang, setDraftLang] = useState(lang);
   const [draftTheme, setDraftTheme] = useState(theme);
-  const changed = draftLang !== lang || draftTheme !== theme;
+  const [draftTg, setDraftTg] = useState(tg.enabled);
+  const changed = draftLang !== lang || draftTheme !== theme || draftTg !== tg.enabled;
   // Подписи — на языке, который сейчас у программы, пока выбор не применён.
   const t = strings[lang];
 
@@ -88,7 +90,7 @@ export function SettingsDialog({ lang, theme, version, tg, onTg, onApply, onClos
         </div>
       </div>
 
-      <TelegramSection lang={lang} status={tg} onStatus={onTg} />
+      <TelegramSection lang={lang} on={draftTg} onToggle={setDraftTg} status={tg} onStatus={onTg} />
 
       <section className="about" aria-label={t.about}>
         <h3>{t.about}</h3>
@@ -118,7 +120,7 @@ export function SettingsDialog({ lang, theme, version, tg, onTg, onApply, onClos
       </section>
 
       <div className="dialog__actions">
-        <button type="button" className="btn btn--primary" disabled={!changed} onClick={() => onApply(draftLang, draftTheme)}>
+        <button type="button" className="btn btn--primary" disabled={!changed} onClick={() => onApply(draftLang, draftTheme, draftTg)}>
           {t.done}
         </button>
       </div>
@@ -132,15 +134,29 @@ const OWNER_POLL_MS = 3000;
 
 /**
  * «Выгрузка в Telegram»: переключатель (по умолчанию выключен — тогда
- * программа в сеть не ходит), затем токен → «Проверить» → /start боту →
- * подключено. Действует сразу, кнопка «Готово» к нему не относится.
+ * программа в сеть не ходит; применяется «Готово», как язык и тема), затем
+ * токен → «Проверить» → /start боту → подключено. Подключение работает и до
+ * «Готово»: это явные действия в окне с включённым переключателем.
  */
-function TelegramSection({ lang, status, onStatus }: { lang: Lang; status: TgStatus; onStatus: (s: TgStatus) => void }) {
+function TelegramSection({
+  lang,
+  on,
+  onToggle,
+  status,
+  onStatus,
+}: {
+  lang: Lang;
+  /** Переключатель в окне (ещё не сохранён). */
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  status: TgStatus;
+  onStatus: (s: TgStatus) => void;
+}) {
   const t = strings[lang];
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<TgError | null>(null);
-  const waiting = status.enabled && !!status.bot && !status.owner;
+  const waiting = on && !!status.bot && !status.owner;
 
   // Ждём /start: спрашиваем Telegram, пока окно открыто и владельца нет.
   useEffect(() => {
@@ -148,7 +164,7 @@ function TelegramSection({ lang, status, onStatus }: { lang: Lang; status: TgSta
     let alive = true;
     const tick = () =>
       backend
-        .tgFindOwner()
+        .tgFindOwner(true)
         .then((s) => alive && onStatus(s))
         .catch((e: TgError) => alive && setError(e));
     void tick();
@@ -165,7 +181,7 @@ function TelegramSection({ lang, status, onStatus }: { lang: Lang; status: TgSta
     setBusy(true);
     setError(null);
     try {
-      onStatus(await backend.tgCheckToken(token));
+      onStatus(await backend.tgCheckToken(token, true));
       setToken("");
     } catch (e) {
       setError(e as TgError);
@@ -186,16 +202,16 @@ function TelegramSection({ lang, status, onStatus }: { lang: Lang; status: TgSta
           type="button"
           role="switch"
           className="switch"
-          aria-checked={status.enabled}
+          aria-checked={on}
           aria-labelledby="tg-title"
-          onClick={() => void backend.tgSetEnabled(!status.enabled).then(onStatus)}
+          onClick={() => onToggle(!on)}
         >
           <span className="switch__knob" />
         </button>
       </div>
-      <p className="tg__lead">{status.enabled ? t.tgLeadOn : t.tgLeadOff}</p>
+      <p className="tg__lead">{on ? t.tgLeadOn : t.tgLeadOff}</p>
 
-      {status.enabled && !status.bot && (
+      {on && !status.bot && (
         <div className="tg__form">
           <label htmlFor="tg-token">{t.tgToken}</label>
           <div className="row">
@@ -244,7 +260,7 @@ function TelegramSection({ lang, status, onStatus }: { lang: Lang; status: TgSta
         </div>
       )}
 
-      {status.enabled && status.bot && status.owner && (
+      {on && status.bot && status.owner && (
         <div className="tg__card">
           <span className="tg__ok" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">

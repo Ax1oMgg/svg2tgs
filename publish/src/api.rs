@@ -116,7 +116,12 @@ impl<T: Transport> Bot<T> {
         let v = self
             .call("getMe", vec![])
             .map_err(PublishError::from_token)?;
-        serde_json::from_value(v).map_err(PublishError::unexpected)
+        serde_json::from_value(v.clone()).map_err(|e| {
+            PublishError::unexpected(format!(
+                "getMe: {e}: {}",
+                crate::http::snippet(&v.to_string())
+            ))
+        })
     }
 
     /// `getUpdates`: последний, кто написал боту /start.
@@ -160,7 +165,12 @@ impl<T: Transport> Bot<T> {
         v.get("file_id")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or(Failure::Unexpected)
+            .ok_or_else(|| {
+                Failure::Unexpected(format!(
+                    "uploadStickerFile без file_id: {}",
+                    crate::http::snippet(&v.to_string())
+                ))
+            })
     }
 
     /// `createNewStickerSet`.
