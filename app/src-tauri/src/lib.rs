@@ -5,6 +5,7 @@
 //! выполняется в фоновых потоках, окно не подвисает.
 
 mod files;
+mod telegram;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use svg2tgs_core::{Grid, Options, Warning};
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 /// Один добавленный файл и результат его последней конвертации.
@@ -397,6 +398,8 @@ enum Link {
     Issues,
     Telegram,
     Email,
+    /// @BotFather — подсказка, где создать бота для выгрузки.
+    Botfather,
 }
 
 /// Открывает ссылку в браузере (почту — в почтовой программе). Адреса
@@ -408,6 +411,126 @@ fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
         Link::Issues => "https://github.com/Ax1oMgg/svg2tgs/issues",
         Link::Telegram => "https://t.me/chajnaya_Axioma",
         Link::Email => "mailto:chajnayaaxioma@gmail.com",
+        Link::Botfather => "https://t.me/BotFather",
+    };
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/* ------------------------------ Выгрузка в Telegram ----------------------------- */
+
+use telegram::{PublishRequest, Status, Telegram, TgError};
+
+/// Ошибка фонового потока — как «прочий отказ».
+fn join_error(e: impl ToString) -> TgError {
+    TgError::Publish(svg2tgs_publish::PublishError::Telegram {
+        status: 0,
+        detail: e.to_string(),
+    })
+}
+
+/// Состояние выгрузки — без сети.
+#[tauri::command]
+fn tg_status(tg: State<'_, Telegram>) -> Status {
+    tg.status()
+}
+
+/// Переключатель в «Настройках».
+#[tauri::command]
+fn tg_set_enabled(enabled: bool, tg: State<'_, Telegram>) -> Status {
+    tg.set_enabled(enabled)
+}
+
+/// Проверить токен бота и запомнить его в системном хранилище.
+#[tauri::command]
+async fn tg_check_token(token: String, app: tauri::AppHandle) -> Result<Status, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Telegram>().check_token(&token, telegram::http)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Найти владельца по /start.
+#[tauri::command]
+async fn tg_find_owner(app: tauri::AppHandle) -> Result<Status, TgError> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<Telegram>().find_owner(telegram::http))
+        .await
+        .map_err(join_error)?
+}
+
+/// Забыть бота и токен.
+#[tauri::command]
+fn tg_disconnect(tg: State<'_, Telegram>) -> Status {
+    tg.disconnect()
+}
+
+/// Начало адреса набора из названия.
+#[tauri::command]
+fn tg_stem(title: String, tg: State<'_, Telegram>) -> String {
+    tg.stem(&title)
+}
+
+/// Выгрузить готовые TGS; ход — через `on_progress`.
+#[tauri::command]
+async fn tg_publish(
+    request: PublishRequest,
+    on_progress: tauri::ipc::Channel<svg2tgs_publish::Progress>,
+    app: tauri::AppHandle,
+) -> Result<svg2tgs_publish::Done, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tg = app.state::<Telegram>();
+        let config = tg.config();
+        let bot_name = config.bot.clone().ok_or(TgError::NoToken)?;
+        let owner = config
+            .owner
+            .clone()
+            .ok_or(TgError::Publish(svg2tgs_publish::PublishError::NoOwner))?;
+        let items = app.state::<AppState>().items.lock().unwrap().clone();
+        let job = telegram::build_job(&request, &bot_name, |id, tile| {
+            items.get(id).and_then(|i| i.tiles.get(tile).cloned())
+        })?;
+        let bot = tg.bot_with(None, telegram::http)?;
+        telegram::reset_stop(&tg.stop);
+        svg2tgs_publish::run(
+            &bot,
+            &bot_name,
+            owner.id,
+            &job,
+            |p| {
+                let _ = on_progress.send(p);
+            },
+            &tg.stop,
+        )
+        .map_err(TgError::from)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// «Остановить»: выгрузка закончится после текущего файла.
+#[tauri::command]
+fn tg_stop(tg: State<'_, Telegram>) {
+    tg.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Открыть в браузере набор или бота. Адрес собирается здесь из проверенного
+/// имени: окно не может попросить открыть произвольную ссылку.
+#[tauri::command]
+fn tg_open(
+    kind: Option<svg2tgs_publish::SetKind>,
+    name: Option<String>,
+    tg: State<'_, Telegram>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let bot = tg.config().bot.ok_or("no_bot")?;
+    let url = match (kind, name) {
+        (Some(kind), Some(name)) => telegram::set_link(kind, &name, &bot).ok_or("bad_name")?,
+        _ if bot.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            format!("https://t.me/{bot}")
+        }
+        _ => return Err("bad_name".into()),
     };
     app.opener()
         .open_url(url, None::<&str>)
@@ -420,6 +543,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
+        .setup(|app| {
+            let path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|d| d.join("telegram.json"));
+            app.manage(Telegram::load(path, Box::new(telegram::Keyring)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             startup_paths,
@@ -436,6 +568,15 @@ pub fn run() {
             options_json,
             import_options_file,
             export_options_file,
+            tg_status,
+            tg_set_enabled,
+            tg_check_token,
+            tg_find_owner,
+            tg_disconnect,
+            tg_stem,
+            tg_publish,
+            tg_stop,
+            tg_open,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить приложение");

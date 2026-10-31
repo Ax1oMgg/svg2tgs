@@ -220,3 +220,53 @@ export interface Existing {
   /** Предлагаемое новое имя без расширения. */
   suggested: string;
 }
+
+/* ----------------------------- Выгрузка в Telegram ---------------------------- */
+
+/** Состояние выгрузки (`telegram::Status`). */
+export interface TgStatus {
+  /** Переключатель в «Настройках»; выключен — программа в сеть не ходит. */
+  enabled: boolean;
+  /** Имя бота без @, если токен проверен. */
+  bot: string | null;
+  /** Владелец наборов: `@ник` или имя; `null` — боту ещё не написали /start. */
+  owner: string | null;
+}
+
+/** Ошибка выгрузки: код и параметры (`TgError`, `PublishError`). */
+export interface TgError {
+  code: string;
+  [key: string]: unknown;
+}
+
+export type SetKind = "stickers" | "emoji";
+
+/** Один стикер задания: файл списка и, при нарезке, номер клетки. */
+export interface PublishItem {
+  id: string;
+  tile: number | null;
+  /** Имя файла без расширения. */
+  name: string;
+  emoji: string[];
+}
+
+export interface PublishRequest {
+  kind: SetKind;
+  title: string;
+  /** Начало адреса, без `_by_<бот>`. */
+  stem: string;
+  resume: boolean;
+  items: PublishItem[];
+}
+
+export interface PublishProgress {
+  done: number;
+  total: number;
+}
+
+export interface PublishDone {
+  name: string;
+  link: string;
+  count: number;
+  resumed_from: number;
+}

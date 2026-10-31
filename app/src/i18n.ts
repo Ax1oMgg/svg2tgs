@@ -58,7 +58,17 @@ const PARAMS = {
   importTargetMany: ["n"],
   importOk: ["n"],
   importErr_syntax: ["line", "column"],
-  importErr_value: ["line", "column"]
+  importErr_value: ["line", "column"],
+  tgBotFound: ["bot"],
+  tgOwner: ["owner"],
+  tgPublishGrid: ["name"],
+  pubVia: ["bot", "owner"],
+  pubEmojiFor: ["name"],
+  pubCell: ["n"],
+  pubGridInfo: ["n", "name", "c", "r"],
+  pubGo: ["n"],
+  pubProgress: ["done", "total"],
+  pubDoneText: ["n", "title"],
 } as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
 
 type Key = Exclude<keyof typeof ru, `_${string}`>;
@@ -135,6 +145,16 @@ export function warningText(w: Warning, lang: Lang): string {
 export function errorText(code: string, lang: Lang): string {
   const tpl = (strings[lang] as unknown as Record<string, unknown>)[`error_${code}`];
   return typeof tpl === "string" ? tpl : code;
+}
+
+/** Текст ошибки выгрузки в Telegram: шаблон `tgErr_<код>`, номера файлов — с 1. */
+export function tgErrorText(e: { code: string; [k: string]: unknown }, lang: Lang): string {
+  const tpl = (strings[lang] as unknown as Record<string, unknown>)[`tgErr_${e.code}`];
+  if (typeof tpl !== "string") return typeof e.detail === "string" ? e.detail : e.code;
+  const values: Record<string, Arg> = {};
+  for (const [k, v] of Object.entries(e)) if (typeof v === "string" || typeof v === "number") values[k] = v;
+  if (typeof e.index === "number") values.index = e.index + 1;
+  return fill(tpl, values);
 }
 
 /** Важность замечания: справочное или предупреждение (как `Severity` в core). */

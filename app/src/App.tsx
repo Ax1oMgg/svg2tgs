@@ -7,6 +7,7 @@ import { Preview } from "./components/Preview";
 import { ConflictDialog, type ConflictChoice } from "./components/ConflictDialog";
 import { CropEditor } from "./components/CropEditor";
 import { ImportDialog } from "./components/ImportDialog";
+import { PublishDialog, type PublishSource } from "./components/PublishDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
@@ -24,6 +25,8 @@ import {
   type SaveRequest,
   type Saved,
   type SectionId,
+  type SetKind,
+  type TgStatus,
 } from "./types";
 import { effectiveOptions, useFiles } from "./useFiles";
 import "./App.css";
@@ -87,6 +90,9 @@ export function App() {
   const [conflict, setConflict] = useState<ConflictAsk | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
   const [version, setVersion] = useState("");
+  // Выгрузка в Telegram: состояние читается без сети.
+  const [tg, setTg] = useState<TgStatus>({ enabled: false, bot: null, owner: null });
+  const [publishing, setPublishing] = useState<{ source: PublishSource; kind: SetKind } | null>(null);
   const pasted = useRef(0);
   const t = strings[prefs.lang];
 
@@ -121,6 +127,7 @@ export function App() {
       setBrowserMode(info.runtime === "browser");
       setVersion(info.version);
     });
+    void backend.tgStatus().then(setTg);
     void backend.startupPaths().then((paths) => {
       if (paths.length > 0) void addPaths(paths);
     });
@@ -417,6 +424,29 @@ export function App() {
       setToast({ text: t.settingsSaved, dismissOnAction: true });
   };
 
+  // «В Telegram»: нарезанный выбранный файл — его клетки (эмодзи),
+  // иначе — все готовые файлы списка по порядку.
+  const sliced =
+    selected && selected.status !== "error" && selected.outcome && !selected.outcome.error && selected.outcome.grid[0] * selected.outcome.grid[1] > 1
+      ? selected
+      : null;
+  const ready = items.filter((it) => (it.status === "ok" || it.status === "warn") && it.outcome && !it.outcome.error);
+  const connected = !!tg.bot && !!tg.owner;
+  const publish = tg.enabled
+    ? {
+        title: !connected ? t.tgPublishNoBot : sliced ? t.tgPublishGrid(sliced.name) : t.tgPublishList,
+        onClick:
+          connected && (sliced || ready.length > 0)
+            ? () =>
+                setPublishing(
+                  sliced && sliced.outcome
+                    ? { source: { kind: "grid", item: sliced, cols: sliced.outcome.grid[0], rows: sliced.outcome.grid[1] }, kind: "emoji" }
+                    : { source: { kind: "list", items: ready }, kind: prefs.previewKind === "emoji" ? "emoji" : "stickers" },
+                )
+            : null,
+      }
+    : null;
+
   const exportPanel = (
     <ExportPanel
       // Панель не пересоздаётся при смене файла или области: прокрутка
@@ -445,6 +475,7 @@ export function App() {
       exporting={exporting}
       onExport={() => void runExport(items.map((it) => it.id))}
       onExportOne={selected && selected.status !== "error" ? () => void runExport([selected.id]) : null}
+      publish={publish}
       onChooseDir={() =>
         void backend
           .pickFolder(prefs.export.dir ?? undefined)
@@ -525,6 +556,8 @@ export function App() {
           lang={prefs.lang}
           theme={prefs.theme}
           version={version}
+          tg={tg}
+          onTg={setTg}
           onApply={(lang, theme) => {
             patch({ lang, theme });
             setSettingsOpen(false);
@@ -550,6 +583,17 @@ export function App() {
           initial={importing.text}
           onApply={(parsed) => applyImported(parsed.options)}
           onClose={() => setImporting(null)}
+        />
+      )}
+
+      {publishing && tg.bot && (
+        <PublishDialog
+          lang={prefs.lang}
+          status={tg}
+          source={publishing.source}
+          defaultKind={publishing.kind}
+          onToast={(text) => setToast({ text, dismissOnAction: true })}
+          onClose={() => setPublishing(null)}
         />
       )}
 
