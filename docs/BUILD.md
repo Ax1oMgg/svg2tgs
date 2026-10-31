@@ -1,5 +1,23 @@
 # Сборка и запуск
 
+## Структура репозитория
+
+```
+core/            Rust-библиотека: SVG → Lottie → TGS, проверки Telegram
+render/          рендер для превью и тестов: TGS через rlottie, SVG через resvg
+  vendor/        исходники rlottie (движок Telegram) — см. README внутри
+cli/             командная строка svg2tgs на том же ядре
+app/             настольное приложение (Tauri 2 + React + TypeScript)
+  src/           интерфейс
+  src/locales/   переводы — по файлу на язык (TRANSLATIONS.md)
+  src/styles/tokens.css   дизайн-токены (общие с макетом, DESIGN.md)
+  src-tauri/     Rust-часть приложения
+tests/fixtures/  тестовые SVG с описанием, что каждый проверяет
+docs/            документация
+.github/         проверки и сборка установщиков (GitHub Actions)
+legacy/          исходный Python-скрипт (для сравнения, не используется)
+```
+
 ## Что нужно установить один раз
 
 ### Windows 10/11
