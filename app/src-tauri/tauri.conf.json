@@ -57,7 +57,7 @@
       }
     },
     "publisher": "Чайная Аксиома",
-    "copyright": "© 2026 Чайная Аксиома. Автор — Ax1oM. MIT License.",
+    "copyright": "© 2026 Чайная Аксиома. Автор — Парамонов Григорий aka Ax1oMgg. MIT License.",
     "license": "MIT",
     "homepage": "https://github.com/Ax1oMgg/svg2tgs",
     "longDescription": "Превращает SVG в стикеры и эмодзи Telegram (TGS). Работает полностью локально, без интернета.",
