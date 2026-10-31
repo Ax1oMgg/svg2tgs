@@ -324,5 +324,6 @@
   "tgErr_network": "Lost connection to Telegram: {done} uploaded.",
   "tgErr_stopped": "Stopped: {done} uploaded.",
   "tgErr_telegram": "Telegram returned error {status}: {detail}",
-  "tgErr_read_failed": "Could not read file #{index}: {detail}"
+  "tgErr_read_failed": "Could not read file #{index}: {detail}",
+  "tgErr_unexpected": "Telegram sent an unexpected response ({detail}). The connection may go through a proxy or a provider filter."
 }

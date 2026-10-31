@@ -17,9 +17,9 @@ pub enum Failure {
         /// Сколько секунд подождать (ответ 429).
         retry_after: Option<u64>,
     },
-    /// Ответ не похож на ответ Bot API.
-    #[error("непонятный ответ")]
-    Unexpected,
+    /// Ответ не похож на ответ Bot API: HTTP-код и начало ответа.
+    #[error("непонятный ответ: {0}")]
+    Unexpected(String),
 }
 
 /// Почему выгрузка не удалась.
@@ -78,13 +78,16 @@ pub enum PublishError {
     /// Не удалось прочитать файл с диска.
     #[error("read_failed")]
     ReadFailed { index: usize, detail: String },
+    /// Ответ не похож на ответ Bot API (например, страница прокси вместо
+    /// Telegram): HTTP-код и начало ответа.
+    #[error("unexpected")]
+    Unexpected { detail: String },
 }
 
 impl PublishError {
-    pub(crate) fn unexpected<E>(_: E) -> Self {
-        Self::Telegram {
-            status: 0,
-            detail: "unexpected response".into(),
+    pub(crate) fn unexpected(detail: impl std::fmt::Display) -> Self {
+        Self::Unexpected {
+            detail: detail.to_string(),
         }
     }
 
@@ -92,7 +95,7 @@ impl PublishError {
     pub(crate) fn from_failure(f: Failure, done: usize) -> Self {
         match f {
             Failure::Network(detail) => Self::Network { done, detail },
-            Failure::Unexpected => Self::unexpected(()),
+            Failure::Unexpected(detail) => Self::Unexpected { detail },
             Failure::Api {
                 code: 401 | 404, ..
             } => Self::InvalidToken,

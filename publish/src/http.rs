@@ -17,6 +17,8 @@ pub const API_HOST: &str = "https://api.telegram.org";
 pub struct HttpTransport {
     token: String,
     agent: ureq::Agent,
+    /// Всегда `API_HOST`; другой адрес — только в тестах (локальный сервер).
+    host: &'static str,
 }
 
 impl HttpTransport {
@@ -30,6 +32,7 @@ impl HttpTransport {
         Self {
             token: token.trim().to_string(),
             agent: config.into(),
+            host: API_HOST,
         }
     }
 }
@@ -100,15 +103,26 @@ pub(crate) fn multipart(form: &Form, boundary: &str) -> Vec<u8> {
     body
 }
 
+/// Начало текста для сообщения об ошибке: одна строка, до 200 символов.
+pub(crate) fn snippet(text: &str) -> String {
+    let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = one.chars().take(200).collect();
+    if one.chars().count() > 200 {
+        out.push('…');
+    }
+    out
+}
+
 /// Разбор ответа Bot API: `{ok, result}` или `{ok: false, error_code, description, parameters}`.
 pub(crate) fn parse(v: Value) -> Result<Value, Failure> {
+    let odd = || Failure::Unexpected(snippet(&v.to_string()));
     if v.get("ok").and_then(Value::as_bool) == Some(true) {
-        return v.get("result").cloned().ok_or(Failure::Unexpected);
+        return v.get("result").cloned().ok_or_else(odd);
     }
     let code = v
         .get("error_code")
         .and_then(Value::as_i64)
-        .ok_or(Failure::Unexpected)?;
+        .ok_or_else(odd)?;
     Err(Failure::Api {
         code,
         description: v
@@ -120,26 +134,61 @@ pub(crate) fn parse(v: Value) -> Result<Value, Failure> {
     })
 }
 
+/// Тело `application/x-www-form-urlencoded` (для запросов без файлов).
+pub(crate) fn urlencoded(form: &Form) -> String {
+    fn enc(s: &str) -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+    form.iter()
+        .filter_map(|(k, v)| match v {
+            Field::Text(t) => Some(format!("{}={}", enc(k), enc(t))),
+            Field::File { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 impl Transport for HttpTransport {
     fn call(&self, method: &str, form: Form) -> Result<Value, Failure> {
-        let url = format!("{API_HOST}/bot{}/{method}", self.token);
-        let b = boundary(&form);
-        let body = multipart(&form, &b);
+        let url = format!("{}/bot{}/{method}", self.host, self.token);
+        let has_file = form.iter().any(|(_, f)| matches!(f, Field::File { .. }));
+        // Файл — multipart, остальное — обычная форма.
+        let (content_type, body) = if has_file {
+            let b = boundary(&form);
+            (
+                format!("multipart/form-data; boundary={b}"),
+                multipart(&form, &b),
+            )
+        } else {
+            (
+                "application/x-www-form-urlencoded".to_string(),
+                urlencoded(&form).into_bytes(),
+            )
+        };
         let resp = self
             .agent
             .post(&url)
-            .header(
-                "Content-Type",
-                &format!("multipart/form-data; boundary={b}"),
-            )
+            .header("Content-Type", &content_type)
             .send(&body[..])
             // В тексте ошибки ureq есть адрес с токеном — не пропускаем его дальше.
             .map_err(|e| Failure::Network(network_kind(&e).into()))?;
+        let status = resp.status().as_u16();
         let text = resp
             .into_body()
             .read_to_string()
             .map_err(|e| Failure::Network(network_kind(&e).into()))?;
-        let value: Value = serde_json::from_str(&text).map_err(|_| Failure::Unexpected)?;
+        let value: Value = serde_json::from_str(&text).map_err(|_| {
+            // Токена в ответе быть не должно, но на всякий случай вырезаем.
+            let clean = text.replace(&self.token, "***");
+            Failure::Unexpected(format!("HTTP {status}: {}", snippet(&clean)))
+        })?;
         parse(value)
     }
 }
@@ -216,7 +265,162 @@ mod tests {
                 retry_after: Some(7)
             })
         );
-        assert_eq!(parse(serde_json::json!({"x": 1})), Err(Failure::Unexpected));
+        assert!(
+            matches!(parse(serde_json::json!({"x": 1})), Err(Failure::Unexpected(d)) if d.contains("\"x\""))
+        );
+    }
+
+    #[test]
+    fn text_forms_are_urlencoded() {
+        let form: Form = vec![
+            ("name".into(), Field::Text("a_by_b".into())),
+            (
+                "stickers".into(),
+                Field::Text(r#"[{"emoji_list":["❤️"]}]"#.into()),
+            ),
+        ];
+        assert_eq!(
+            urlencoded(&form),
+            "name=a_by_b&stickers=%5B%7B%22emoji_list%22%3A%5B%22%E2%9D%A4%EF%B8%8F%22%5D%7D%5D"
+        );
+    }
+
+    #[test]
+    fn snippets_are_short_and_single_line() {
+        let s = snippet(&format!("<html>\n  <body>{}</body>", "x".repeat(300)));
+        assert!(!s.contains('\n'));
+        assert!(s.chars().count() <= 201);
+        assert!(s.starts_with("<html> <body>"));
+    }
+
+    /// Локальный сервер на один запрос: возвращает запрос целиком
+    /// (заголовки и тело) и отвечает `status` с телом `body`.
+    fn serve_once(status: &str, body: &str) -> (&'static str, std::thread::JoinHandle<Vec<u8>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host: &'static str =
+            Box::leak(format!("http://{}", listener.local_addr().unwrap()).into_boxed_str());
+        let reply = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 4096];
+            // Заголовки, затем тело по Content-Length.
+            loop {
+                let n = sock.read(&mut buf).unwrap();
+                req.extend_from_slice(&buf[..n]);
+                if let Some(end) = req.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&req[..end]).to_lowercase();
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse().unwrap());
+                    while req.len() < end + 4 + len {
+                        let n = sock.read(&mut buf).unwrap();
+                        req.extend_from_slice(&buf[..n]);
+                    }
+                    break;
+                }
+            }
+            sock.write_all(reply.as_bytes()).unwrap();
+            req
+        });
+        (host, handle)
+    }
+
+    fn local(host: &'static str) -> HttpTransport {
+        HttpTransport {
+            host,
+            ..HttpTransport::new("123:abc")
+        }
+    }
+
+    #[test]
+    fn real_client_sends_form_and_reads_json() {
+        let (host, server) =
+            serve_once("200 OK", r#"{"ok":true,"result":{"id":5,"username":"b"}}"#);
+        let r = local(host).call(
+            "getUpdates",
+            vec![(
+                "allowed_updates".into(),
+                Field::Text(r#"["message"]"#.into()),
+            )],
+        );
+        assert_eq!(r.unwrap()["username"], "b");
+        let req = String::from_utf8(server.join().unwrap()).unwrap();
+        assert!(
+            req.starts_with("POST /bot123:abc/getUpdates HTTP/1.1"),
+            "{req}"
+        );
+        assert!(
+            req.to_lowercase()
+                .contains("content-type: application/x-www-form-urlencoded"),
+            "{req}"
+        );
+        assert!(
+            req.ends_with("allowed_updates=%5B%22message%22%5D"),
+            "{req}"
+        );
+    }
+
+    #[test]
+    fn real_client_uploads_multipart() {
+        let (host, server) = serve_once("200 OK", r#"{"ok":true,"result":{"file_id":"F"}}"#);
+        let form: Form = vec![
+            ("user_id".into(), Field::Text("7".into())),
+            (
+                "sticker".into(),
+                Field::File {
+                    filename: "a.tgs".into(),
+                    bytes: vec![0x1f, 0x8b, 8, 0],
+                },
+            ),
+        ];
+        assert_eq!(
+            local(host).call("uploadStickerFile", form).unwrap()["file_id"],
+            "F"
+        );
+        let req = server.join().unwrap();
+        let text = String::from_utf8_lossy(&req).to_lowercase();
+        assert!(
+            text.contains(&format!(
+                "content-type: multipart/form-data; boundary={BOUNDARY}"
+            )),
+            "{text}"
+        );
+        assert!(contains(&req, &[0x1f, 0x8b, 8, 0]));
+    }
+
+    #[test]
+    fn real_client_reports_non_json_with_status() {
+        let (host, server) = serve_once(
+            "403 Forbidden",
+            "<html>\n<body>Blocked by proxy 123:abc</body></html>",
+        );
+        let err = local(host).call("getMe", vec![]).unwrap_err();
+        server.join().unwrap();
+        let Failure::Unexpected(detail) = err else {
+            panic!("{err:?}")
+        };
+        assert!(
+            detail.starts_with("HTTP 403: <html> <body>Blocked by proxy"),
+            "{detail}"
+        );
+        assert!(!detail.contains("123:abc"), "{detail}");
+    }
+
+    #[test]
+    fn real_client_reads_api_errors() {
+        let (host, server) = serve_once(
+            "401 Unauthorized",
+            r#"{"ok":false,"error_code":401,"description":"Unauthorized"}"#,
+        );
+        let err = local(host).call("getMe", vec![]).unwrap_err();
+        server.join().unwrap();
+        assert!(matches!(err, Failure::Api { code: 401, .. }), "{err:?}");
     }
 
     #[test]

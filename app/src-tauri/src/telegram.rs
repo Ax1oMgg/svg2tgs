@@ -323,7 +323,7 @@ mod tests {
                 "getUpdates" => Ok(serde_json::json!([{"message": {
                     "text": "/start", "chat": {"type": "private"},
                     "from": {"id": 7, "first_name": "Гриша", "username": "nickname"}}}])),
-                _ => Err(Failure::Unexpected),
+                _ => Err(Failure::Unexpected("test".into())),
             }
         }
     }

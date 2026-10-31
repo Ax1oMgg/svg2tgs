@@ -116,6 +116,9 @@ pub fn publish_error(e: &svg2tgs_publish::PublishError) -> String {
         E::Network { done, .. } => format!("нет связи с Telegram (выгружено {done})"),
         E::Stopped { done } => format!("остановлено (выгружено {done})"),
         E::Telegram { status, detail } => format!("Telegram ответил ошибкой {status}: {detail}"),
+        E::Unexpected { detail } => format!(
+            "Telegram прислал непонятный ответ ({detail}); возможно, соединение идёт через прокси или фильтр"
+        ),
         E::ReadFailed { index, detail } => {
             format!("не удалось прочитать файл №{}: {detail}", index + 1)
         }
