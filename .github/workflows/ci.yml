@@ -74,8 +74,14 @@ jobs:
         run: cargo test --workspace 2>&1 | tee -a ci.log; exit ${PIPESTATUS[0]}
 
       # Журнал ошибки — комментарием в PR: так его видно и без доступа к Actions.
+      # В PR из форков токен только для чтения и комментарий не оставить, поэтому
+      # там шаг пропускается (журнал виден в самой проверке), а сбой комментария
+      # не заслоняет настоящую ошибку.
       - name: Журнал ошибки в PR
-        if: failure() && github.event_name == 'pull_request'
+        if: >-
+          failure() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

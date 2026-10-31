@@ -1,0 +1,21 @@
+name: Идея
+description: Предложить новую возможность или улучшение
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Загляните в [планы](https://github.com/Ax1oMgg/svg2tgs/blob/main/docs/ROADMAP.md) — возможно, идея там уже есть.
+        Приложение работает без сети, поэтому идеи, которым нужен интернет, мы не принимаем.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что хотелось бы
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Зачем — какую задачу это решает
+    validations:
+      required: true
