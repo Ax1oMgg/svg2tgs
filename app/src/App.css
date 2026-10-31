@@ -1412,25 +1412,32 @@ details[open] > .sec .sec__chev {
   scrollbar-gutter: stable;
 }
 
-.scroll::-webkit-scrollbar {
+/* Окна (<dialog>) прокручиваются сами — полоса та же, что у панелей (16 px). */
+.scroll::-webkit-scrollbar,
+.dialog::-webkit-scrollbar {
   width: 8px;
   background: transparent;
 }
 
-.scroll--16::-webkit-scrollbar {
+.scroll--16::-webkit-scrollbar,
+.dialog::-webkit-scrollbar {
   width: 16px;
 }
 
 .scroll::-webkit-scrollbar-track,
-.scroll::-webkit-scrollbar-corner {
+.scroll::-webkit-scrollbar-corner,
+.dialog::-webkit-scrollbar-track,
+.dialog::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.scroll::-webkit-scrollbar-button {
+.scroll::-webkit-scrollbar-button,
+.dialog::-webkit-scrollbar-button {
   display: none;
 }
 
-.scroll::-webkit-scrollbar-thumb {
+.scroll::-webkit-scrollbar-thumb,
+.dialog::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar);
   background-clip: padding-box;
   border: 1px solid transparent;
@@ -1438,16 +1445,19 @@ details[open] > .sec .sec__chev {
   min-height: 32px;
 }
 
-.scroll--16::-webkit-scrollbar-thumb {
+.scroll--16::-webkit-scrollbar-thumb,
+.dialog::-webkit-scrollbar-thumb {
   border-width: 2px 5px;
 }
 
-.scroll::-webkit-scrollbar-thumb:hover {
+.scroll::-webkit-scrollbar-thumb:hover,
+.dialog::-webkit-scrollbar-thumb:hover {
   background: var(--color-scrollbar-hover);
   background-clip: padding-box;
 }
 
-.scroll::-webkit-scrollbar-thumb:active {
+.scroll::-webkit-scrollbar-thumb:active,
+.dialog::-webkit-scrollbar-thumb:active {
   background: var(--color-scrollbar-active);
   background-clip: padding-box;
 }
