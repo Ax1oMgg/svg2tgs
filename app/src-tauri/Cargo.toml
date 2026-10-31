@@ -24,3 +24,5 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 base64 = "0.23"
 svg2tgs-render.workspace = true
+keyring = "4.2"
+svg2tgs-publish.workspace = true

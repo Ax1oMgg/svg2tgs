@@ -6,8 +6,24 @@
  * можно открыть отдельно, например для сверки с макетом.
  */
 
-import { invoke } from "@tauri-apps/api/core";
-import { DEFAULT_OPTIONS, type Existing, type Options, type OptionsError, type Outcome, type ParsedOptions, type SaveRequest, type Saved, type Source } from "./types";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  DEFAULT_OPTIONS,
+  type Existing,
+  type Options,
+  type OptionsError,
+  type Outcome,
+  type ParsedOptions,
+  type PublishDone,
+  type PublishProgress,
+  type PublishRequest,
+  type SaveRequest,
+  type Saved,
+  type SetKind,
+  type Source,
+  type TgError,
+  type TgStatus,
+} from "./types";
 
 export interface AppInfo {
   version: string;
@@ -25,7 +41,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.6", coreVersion: "0.1.6", runtime: "browser" };
+    return { version: "0.2.0", coreVersion: "0.2.0", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -141,7 +157,7 @@ export async function exportOptionsFile(options: Options, name: string): Promise
   return true;
 }
 
-export type Link = "project" | "issues" | "telegram" | "email";
+export type Link = "project" | "issues" | "telegram" | "email" | "botfather";
 
 /** Адреса ссылок «О программе» (в Rust они же — белый список). */
 export const LINKS: Record<Link, string> = {
@@ -149,6 +165,7 @@ export const LINKS: Record<Link, string> = {
   issues: "https://github.com/Ax1oMgg/svg2tgs/issues",
   telegram: "https://t.me/chajnaya_Axioma",
   email: "mailto:chajnayaaxioma@gmail.com",
+  botfather: "https://t.me/BotFather",
 };
 
 /** Открыть ссылку в браузере пользователя (сама программа в сеть не ходит). */
@@ -157,6 +174,110 @@ export async function openLink(link: Link): Promise<void> {
   else window.open(LINKS[link], "_blank", "noopener");
 }
 
+/* ----------------------------- Выгрузка в Telegram ---------------------------- */
+/* В сеть ходит только Rust и только при включённой выгрузке (это проверяется
+   там же). В браузерном режиме — заглушка: любой токен с «:» подходит,
+   владелец находится со второй попытки, выгрузка «идёт» по таймеру. */
+
+/** Вызов, который может вернуть ошибку выгрузки кодом. */
+async function tgCall<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    throw (typeof e === "object" && e && "code" in e ? e : { code: "telegram", status: 0, detail: String(e) }) as TgError;
+  }
+}
+
+export async function tgStatus(): Promise<TgStatus> {
+  return isTauri() ? invoke<TgStatus>("tg_status") : { ...tgMock.status };
+}
+
+export async function tgSetEnabled(enabled: boolean): Promise<TgStatus> {
+  if (isTauri()) return invoke<TgStatus>("tg_set_enabled", { enabled });
+  tgMock.status = { ...tgMock.status, enabled };
+  return { ...tgMock.status };
+}
+
+/** Проверить токен (сеть) и сохранить его в системном хранилище. */
+export async function tgCheckToken(token: string): Promise<TgStatus> {
+  if (isTauri()) return tgCall<TgStatus>("tg_check_token", { token });
+  await delay(600);
+  if (!tgMock.status.enabled) throw { code: "disabled" } as TgError;
+  if (!/^\d+:\S{6,}$/.test(token.trim())) throw { code: "invalid_token" } as TgError;
+  tgMock.status = { ...tgMock.status, bot: "tea_stickers_bot", owner: null };
+  tgMock.polls = 0;
+  return { ...tgMock.status };
+}
+
+/** Найти владельца по /start (сеть). */
+export async function tgFindOwner(): Promise<TgStatus> {
+  if (isTauri()) return tgCall<TgStatus>("tg_find_owner");
+  await delay(300);
+  if (++tgMock.polls >= 2) tgMock.status = { ...tgMock.status, owner: "@nickname" };
+  return { ...tgMock.status };
+}
+
+export async function tgDisconnect(): Promise<TgStatus> {
+  if (isTauri()) return invoke<TgStatus>("tg_disconnect");
+  tgMock.status = { ...tgMock.status, bot: null, owner: null };
+  return { ...tgMock.status };
+}
+
+/** Начало адреса набора из названия (правила — в Rust). */
+export async function tgStem(title: string): Promise<string> {
+  if (isTauri()) return invoke<string>("tg_stem", { title });
+  const s = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return /^[a-z]/.test(s) ? s : s ? `s_${s}` : "stickers";
+}
+
+/** Выгрузить набор; ход — через `onProgress`. */
+export async function tgPublish(request: PublishRequest, onProgress: (p: PublishProgress) => void): Promise<PublishDone> {
+  const name = `${request.stem}_by_${tgMock.status.bot ?? "bot"}`;
+  if (isTauri()) {
+    const channel = new Channel<PublishProgress>();
+    channel.onmessage = onProgress;
+    return tgCall<PublishDone>("tg_publish", { request, onProgress: channel });
+  }
+  const total = request.items.length;
+  const start = request.resume ? (tgMock.sets.get(name) ?? 0) : 0;
+  if (!request.resume && tgMock.sets.has(name)) throw { code: "name_taken", name } as TgError;
+  tgMock.stop = false;
+  for (let done = start + 1; done <= total; done++) {
+    await delay(120);
+    if (tgMock.stop) throw { code: "stopped", done: done - 1 } as TgError;
+    // Демонстрация обрыва: на 24-м при первой попытке.
+    if (done === 24 && !request.resume) throw { code: "network", done: 23, detail: "io" } as TgError;
+    tgMock.sets.set(name, done);
+    onProgress({ done, total });
+  }
+  const link = `https://t.me/${request.kind === "emoji" ? "addemoji" : "addstickers"}/${name}`;
+  return { name, link, count: total, resumed_from: start };
+}
+
+export async function tgStop(): Promise<void> {
+  if (isTauri()) await invoke("tg_stop");
+  else tgMock.stop = true;
+}
+
+/** Открыть в браузере бота или готовый набор (адрес собирается в Rust). */
+export async function tgOpen(set?: { kind: SetKind; name: string }): Promise<void> {
+  if (isTauri()) await invoke("tg_open", { kind: set?.kind ?? null, name: set?.name ?? null });
+  else
+    window.open(
+      set ? `https://t.me/${set.kind === "emoji" ? "addemoji" : "addstickers"}/${set.name}` : `https://t.me/${tgMock.status.bot}`,
+      "_blank",
+      "noopener",
+    );
+}
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const tgMock = {
+  status: { enabled: false, bot: null, owner: null } as TgStatus,
+  polls: 0,
+  stop: false,
+  sets: new Map<string, number>(),
+};
 
 /** Системный диалог: выбрать SVG-файлы или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {

@@ -55,6 +55,8 @@ interface Props {
   onExport: () => void;
   /** Экспорт только выбранного файла; `null` — его нечем экспортировать. */
   onExportOne: (() => void) | null;
+  /** Кнопка «В Телеграм» видна, только когда выгрузка включена в «Настройках». */
+  publish: { onClick: (() => void) | null; title: string } | null;
   onChooseDir: () => void;
   /** Открыть кадрирование мышью в превью. */
   onCrop: () => void;
@@ -231,6 +233,18 @@ export function ExportPanel(p: Props) {
           >
             <FileDownIcon />
           </button>
+          {p.publish && (
+            <button
+              type="button"
+              className="btn btn--default btn--icon export__one"
+              title={p.publish.title}
+              aria-label={p.publish.title}
+              disabled={!p.publish.onClick || p.exporting}
+              onClick={() => p.publish?.onClick?.()}
+            >
+              <SendIcon />
+            </button>
+          )}
         </div>
       </div>
       <div className="export__body scroll scroll--16">
@@ -712,5 +726,15 @@ function IconToggle(p: { pressed?: boolean; title: string; onClick: () => void; 
         {p.children}
       </svg>
     </button>
+  );
+}
+
+/** «Бумажный самолётик» (Lucide send) — выгрузка в Telegram. */
+function SendIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+      <path d="m21.854 2.147-10.94 10.939" />
+    </svg>
   );
 }
