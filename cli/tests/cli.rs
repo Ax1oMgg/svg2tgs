@@ -201,3 +201,22 @@ fn options_file_with_flags_on_top() {
     assert_eq!(bad.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&bad.stderr).contains("строка 1"));
 }
+
+#[test]
+fn publish_without_token_stops_before_network() {
+    let out = bin()
+        .args(["publish", ".", "--title", "Тест"])
+        .env_remove("SVG2TGS_BOT_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("SVG2TGS_BOT_TOKEN"), "{err}");
+}
+
+#[test]
+fn publish_requires_title() {
+    let out = bin().args(["publish", "."]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--title"));
+}

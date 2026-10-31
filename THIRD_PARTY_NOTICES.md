@@ -38,5 +38,8 @@ Contributors 2022.
 
 resvg, usvg, tiny-skia (MIT / Apache-2.0), Tauri (MIT / Apache-2.0),
 serde, flate2, clap и другие — лицензии MIT и/или Apache-2.0.
+Для выгрузки в Telegram: ureq, rustls (MIT / Apache-2.0 / ISC),
+ring (Apache-2.0 AND ISC), webpki-roots (CDLA-Permissive-2.0 —
+корневые сертификаты Mozilla).
 Полный список с текстами лицензий будет собираться автоматически
 при подготовке установщиков (этап 7).

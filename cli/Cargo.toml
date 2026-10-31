@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 svg2tgs-core.workspace = true
+svg2tgs-publish.workspace = true
 clap = { version = "4.6", features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

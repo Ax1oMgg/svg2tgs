@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod messages;
+mod publish;
 
 use clap::parser::ValueSource;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
@@ -28,7 +29,8 @@ use svg2tgs_core::{
         svg2tgs icon.svg\n  \
         svg2tgs ./svg -r -o ./tgs --preset emoji\n  \
         svg2tgs ./svg --json > report.json\n\n\
-        Коды выхода: 0 — всё сконвертировано, 1 — нечего обрабатывать, 2 — часть файлов с ошибкой."
+        Коды выхода: 0 — всё сконвертировано, 1 — нечего обрабатывать, 2 — часть файлов с ошибкой.\n\n\
+        Выгрузка готовых .tgs в Telegram через своего бота: svg2tgs publish --help"
 )]
 struct Cli {
     /// SVG-файлы или папки с ними.
@@ -512,6 +514,11 @@ fn enable_utf8_console() {}
 
 fn main() -> ExitCode {
     enable_utf8_console();
+    // `svg2tgs publish …` — отдельная подкоманда со своими параметрами.
+    let mut args = std::env::args_os();
+    if args.nth(1).is_some_and(|a| a == "publish") {
+        return publish::main(std::iter::once("svg2tgs publish".into()).chain(args));
+    }
     let matches = Cli::command().get_matches();
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
