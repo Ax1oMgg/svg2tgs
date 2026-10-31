@@ -1,0 +1,39 @@
+name: Ошибка
+description: Программа вылетает, ведёт себя неверно или стикер выглядит не так, как SVG
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: И что вы ожидали увидеть.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      description: Шаги или команда. Если дело в конкретном рисунке — приложите SVG (перетащите файл в это поле; если не принимается, заархивируйте в .zip).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия svg2tgs
+      description: «Настройки» → «О программе», либо `svg2tgs --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Система
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Где
+      options: [Приложение, Командная строка]
+    validations:
+      required: true

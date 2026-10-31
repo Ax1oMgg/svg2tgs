@@ -76,6 +76,11 @@ npm install
 npm run tauri dev
 ```
 
+## Участие и безопасность
+
+Как помочь (в том числе добавить перевод) — в [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Об уязвимостях сообщайте приватно — см. [`SECURITY.md`](SECURITY.md).
+
 ## Лицензия
 
 MIT — см. [`LICENSE`](LICENSE). Сторонние компоненты —
