@@ -76,3 +76,15 @@ pub fn error(e: &Error) -> String {
         Error::InvalidOption(what) => format!("некорректный параметр: {what}"),
     }
 }
+
+/// Текст ошибки чтения файла настроек.
+pub fn options_error(e: &svg2tgs_core::OptionsError) -> String {
+    let at = format!("строка {}, столбец {}", e.line, e.column);
+    match e.code {
+        "syntax" => format!("не JSON ({at})"),
+        "value" => format!("значение не того вида ({at})"),
+        "not_object" => "ожидается объект {…} с настройками".into(),
+        "newer_format" => "файл от более новой версии svg2tgs — обновите программу".into(),
+        other => other.into(),
+    }
+}

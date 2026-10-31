@@ -21,7 +21,7 @@ interface Props {
 const LIMIT = 64 * 1024;
 
 export function formatSize(bytes: number, lang: Lang): string {
-  const [b, k] = lang === "ru" ? ["Б", "КБ"] : ["B", "KB"];
+  const { unitB: b, unitKB: k } = strings[lang];
   return bytes < 1024 ? `${bytes} ${b}` : `${(bytes / 1024).toFixed(1)} ${k}`;
 }
 
@@ -49,7 +49,7 @@ export function splitName(name: string): [string, string] {
 /** Список добавленных файлов со статусом и размером результата.
  *  Ctrl — добавить файл к выбору, Shift — выбрать подряд. */
 export function FileList(props: Props) {
-  const { lang, items, selectedId, onlyProblems } = props;
+  const { lang, items, onlyProblems } = props;
   const t = strings[lang];
   const shown = onlyProblems ? items.filter((it) => it.status === "warn" || it.status === "error") : items;
   const count = (s: FileItem["status"]) => items.filter((it) => it.status === s).length;
@@ -104,7 +104,18 @@ export function FileList(props: Props) {
         {t.onlyProblems}
       </label>
 
-      <ul className="files__list scroll" role="listbox" aria-label={t.files} aria-multiselectable="true" title={t.selectHint}>
+      <ul
+        className="files__list scroll"
+        role="listbox"
+        aria-label={t.files}
+        aria-multiselectable="true"
+        title={t.selectHint}
+        // Рамка фокуса — только после работы с клавиатуры (см. App.css).
+        onPointerDown={(e) => (e.currentTarget.dataset.pointer = "")}
+        onKeyDown={(e) => {
+          if (!["Control", "Shift", "Meta", "Alt"].includes(e.key)) delete e.currentTarget.dataset.pointer;
+        }}
+      >
         {shown.map((it) => {
           const [head, tail] = splitName(it.name);
           return (
@@ -113,7 +124,7 @@ export function FileList(props: Props) {
               role="option"
               aria-selected={props.selectedIds.has(it.id)}
               tabIndex={0}
-              className={`file file--${it.status}${props.selectedIds.has(it.id) ? " file--selected" : ""}${it.id === selectedId ? " file--current" : ""}`}
+              className={`file file--${it.status}${props.selectedIds.has(it.id) ? " file--selected" : ""}`}
               onClick={(e) =>
                 props.onSelect(it.id, { add: e.ctrlKey || e.metaKey, range: e.shiftKey }, shownIds)
               }

@@ -1,505 +1,140 @@
-/** Тексты интерфейса на русском и английском. */
+/**
+ * Тексты интерфейса. Сами переводы — файлы данных `locales/<код>.json`
+ * (только строки, никакого кода): чтобы добавить язык, достаточно положить
+ * рядом новый файл — он подхватится сам, а `npm run check-locales` (и сборка)
+ * проверит, что в нём те же ключи и те же подстановки `{имя}`, что в ru.json.
+ *
+ * Здесь — только то, что относится к коду: какие строки принимают
+ * параметры (и в каком порядке), сборка составных фраз, выбор языка.
+ * Тексты выводятся как текст (React экранирует), адреса ссылок — в коде
+ * и в Rust, поэтому ошибка в переводе максимум испортит надпись.
+ */
 
 import type { Warning } from "./types";
+import ru from "./locales/ru.json";
 
-export type Lang = "ru" | "en";
+/** Код языка — имя файла перевода: "ru", "en", "pt-BR"… */
+export type Lang = string;
 
-const ru = {
-  add: "Добавить",
-  addFiles: "Добавить файлы",
-  addFolder: "Добавить папку",
-  includeSubfolders: "Включая вложенные папки",
-  dropTitle: "Перетащите SVG сюда",
-  dropHint: "Файлы или папки. Можно вставить SVG-код из буфера — Ctrl+V.",
-  dropRelease: "Отпустите, чтобы добавить",
-  files: "Файлы",
-  onlyProblems: "Только с замечаниями",
-  clear: "Очистить",
-  clearHint: "Убрать все файлы из списка",
-  remove: "Убрать из списка",
-  converting: "Конвертация…",
-  conversion: "Конвертация",
-  countOk: "Без замечаний",
-  countWarn: "С замечаниями",
-  countError: "С ошибкой",
-  ownSettings: "свои настройки",
-  clipboardName: (n: number) => `Из буфера ${n}`,
-  summary: (ok: number, warn: number, err: number) =>
-    [ok && `${ok} без замечаний`, warn && `${warn} с замечаниями`, err && `${err} с ошибкой`]
+type Raw = Record<string, string>;
+
+const files = import.meta.glob<{ default: Raw }>("./locales/*.json", { eager: true });
+
+/** Переводы по коду языка. */
+const LOCALES: Record<Lang, Raw> = Object.fromEntries(
+  Object.entries(files).map(([path, mod]) => [path.replace(/^.*\/|\.json$/g, ""), mod.default]),
+);
+
+/** Языки для выбора в настройках: код и название на самом языке. */
+export const LANGS: { code: Lang; name: string }[] = Object.entries(LOCALES)
+  .map(([code, raw]) => ({ code, name: raw._language ?? code }))
+  .sort((a, b) => (a.code === "ru" ? -1 : b.code === "ru" ? 1 : a.name.localeCompare(b.name)));
+
+/** Строки с параметрами: имена подстановок по порядку аргументов. */
+const PARAMS = {
+  clipboardName: ["n"],
+  aboutVersion: ["v"],
+  scopeOneHint: ["name"],
+  saved: ["n"],
+  skipped: ["n"],
+  failed: ["n"],
+  version: ["v"],
+  resetSection: ["title"],
+  ownSettingsToast: ["name"],
+  exists: ["name"],
+  applyAll: ["n"],
+  cropRotation: ["deg"],
+  sliceInfo: ["n", "first", "last"],
+  sliceSource: ["c", "r"],
+  sliceResult: ["n", "size"],
+  exportN: ["n"],
+  exportOne: ["name"],
+  exportOneTiles: ["name", "n"],
+  exportErrors: ["n"],
+  scopeSelectedHint: ["n"],
+  ownSettingsToastMany: ["n"],
+  importHelp: ["target"],
+  importTargetOwn: ["name"],
+  importTargetMany: ["n"],
+  importOk: ["n"],
+  importErr_syntax: ["line", "column"],
+  importErr_value: ["line", "column"]
+} as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
+
+type Key = Exclude<keyof typeof ru, `_${string}`>;
+type Arg = string | number;
+export type Dict = {
+  [K in Key]: K extends keyof typeof PARAMS ? (...args: Arg[]) => string : string;
+} & {
+  /** «3 без замечаний, 1 с замечаниями, 1 с ошибкой» — нулевые части пропускаются. */
+  summary: (ok: number, warn: number, err: number) => string;
+};
+
+/** Подставляет `{имя}` из `values`; неизвестные подстановки остаются как есть. */
+function fill(template: string, values: Record<string, Arg>): string {
+  return template.replace(/\{(\w+)\}/g, (m, name: string) => (name in values ? String(values[name]) : m));
+}
+
+function build(raw: Raw): Dict {
+  // Недостающая строка берётся из русского — надпись не пропадёт.
+  const get = (k: string) => (typeof raw[k] === "string" ? raw[k] : (ru as Raw)[k]);
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(ru)) {
+    if (key.startsWith("_")) continue;
+    const names = (PARAMS as Record<string, readonly string[]>)[key];
+    out[key] = names
+      ? (...args: Arg[]) => fill(get(key), Object.fromEntries(names.map((n, i) => [n, args[i]])))
+      : get(key);
+  }
+  out.summary = (ok: number, warn: number, err: number) =>
+    [ok && fill(get("summaryOk"), { n: ok }), warn && fill(get("summaryWarn"), { n: warn }), err && fill(get("summaryError"), { n: err })]
       .filter(Boolean)
-      .join(", "),
-  // Превью
-  inChat: "Как в чате",
-  closeUp: "Крупно",
-  chatLight: "Светлый чат",
-  chatDark: "Тёмный чат",
-  checker: "Прозрачность",
-  original: "Исходный SVG",
-  result: "Так покажет Telegram",
-  chatMessage: "Смотри, что получилось",
-  emojiMessage: "Новый эмодзи",
-  noPreview: "Превью появится после конвертации",
-  allGood: "Замечаний нет — файл готов для Telegram.",
-  fileFailed: "Файл не конвертирован",
-  // Панель экспорта
-  exportPanel: "Панель экспорта",
-  export: "Экспортировать",
-  exportHint: "Сохранить все файлы списка в TGS",
-  toSource: "В папку источника",
-  toSourceHint: "Каждый TGS сохраняется рядом со своим SVG",
-  choose: "Выбрать",
-  chooseHint: "Выбрать папку для экспорта",
-  scopeAllHint: "Настройки ниже действуют на все файлы без своих настроек",
-  scopeOneHint2: "Свои настройки только для выбранного файла",
-  stickerHint: "Анимированный стикер: 512×512, до 64 КБ",
-  emojiHint: "Кастомный эмодзи: показывается в строке текста, тонкие линии почти пропадают",
-  bounds: "Рамка рисунка",
-  boundsContainer: "По контейнеру",
-  boundsContainerHint: "Область SVG целиком, с пустыми полями",
-  boundsContent: "По краю",
-  boundsContentHint: "Рамка облегает сам рисунок со всех сторон, вместе с толщиной его обводок",
-  aboutVersion: (v: string) => `svg2tgs v${v}`,
-  aboutChannel: "Чайная Аксиома",
-  aboutChannelLink: "Telegram-канал",
-  aboutAuthorFull: "Автор Парамонов Григорий aka Ax1oMgg",
-  aboutLicenseShort: "Лицензия MIT",
-  aboutProjectPage: "Страница проекта",
-  aboutIssues: "Сообщить о проблеме",
-  aboutEmail: "Написать на почту",
-  suffix: "Суффикс",
-  prefix: "Префикс",
-  subfolder: "Подпапка",
-  exportSettings: "Настройки экспорта",
-  scopeAll: "Всех файлов",
-  scopeOne: "Этого файла",
-  scopeOneHint: (name: string) => `Настройки ниже — только для ${name}. Остальные файлы — по общим.`,
-  outline: "Обводка",
-  outlineWidth: "Толщина обводки, px",
-  outlineColor: "Цвет обводки",
-  preset: "Стикер или эмодзи",
-  sticker: "Стикер",
-  emoji: "Эмодзи",
-  object: "Объект",
-  padding: "Отступ от края",
-  fit: "Вписать",
-  fitContain: "Целиком",
-  fitContainHint: "Рисунок целиком, по краям — прозрачные поля",
-  fitCover: "С обрезкой",
-  fitCoverHint: "Заполнить квадрат, лишнее обрезается",
-  background: "Фон",
-  radius: "Скругление",
-  fill: "Заливка",
-  fillColor: "Цвет заливки фона",
-  borderWidth: "Толщина обводки фона, px",
-  borderColor: "Цвет обводки фона",
-  optimization: "Размер файла",
-  optAuto: "Авто",
-  optAutoHint: "Ужать под лимит Telegram 64 КБ",
-  optLossless: "Без потерь",
-  optLosslessHint: "Без упрощения контуров",
-  optManual: "Вручную",
-  optManualHint: "Точность вручную",
-  decimals: "Знаков после запятой",
-  advanced: "Дополнительно",
-  fps: "Кадров в секунду",
-  duration: "Длительность, с",
-  telegramDefault: "как требует Telegram",
-  // Настройки программы
-  settings: "Настройки",
-  closeUnchanged: "Закрыть без изменений",
-  done: "Готово",
-  language: "Язык",
-  theme: "Тема",
-  themeSystem: "Как в системе",
-  themeLight: "Светлая",
-  themeDark: "Тёмная",
-  // Экспорт
-  saved: (n: number) => `Сохранено файлов: ${n}`,
-  skipped: (n: number) => `пропущено: ${n}`,
-  failed: (n: number) => `не удалось: ${n}`,
-  openFolder: "Открыть папку",
-  pastedNeedFolder: "SVG из буфера: выберите папку",
-  browserMode: "Браузерный режим: тестовые данные",
-  // О программе
-  about: "О программе",
-  version: (v: string) => `Версия ${v}`,
-  aboutProject: "Проект «Чайная Аксиома»",
-  aboutAuthor: "Автор — Ax1oM",
-  aboutLicense: "Лицензия MIT, работает без интернета",
-  projectPage: "Страница проекта",
-  // 0.1.3: разделы, трансформация, уведомления, дубли, кадрирование
-  resetSection: (title: string) => `Сбросить «${title}»`,
-  resetAll: "Сбросить все настройки экспорта",
-  position: "Положение",
-  transform: "Трансформация",
-  styleSection: "Оформление",
-  fitWidth: "Ширина",
-  fitWidthHint: "По ширине; лишнее сверху и снизу обрезается, положение — ползунком Y",
-  fitHeight: "Высота",
-  fitHeightHint: "По высоте; лишнее слева и справа обрезается, положение — ползунком X",
-  fitFree: "Вручную",
-  fitFreeHint: "Масштаб вручную",
-  scale: "Масштаб",
-  positionX: "Положение X",
-  positionY: "Положение Y",
-  precisionHint: "Alt или Ctrl — плавно и точнее · Shift — шагами (поворот по 15°) · Shift+Alt — точнее, с шагом 1. Колёсико — над полем в фокусе.",
-  flip: "Отразить",
-  flipH: "Отразить по горизонтали",
-  flipV: "Отразить по вертикали",
-  rotate: "Повернуть",
-  rotateLeft: "Против часовой на 90°",
-  rotateRight: "По часовой на 90°",
-  rotationAngle: "Угол поворота, °",
-  crop: "Обрезка",
-  cropHint: "Обрезать и повернуть мышью в превью",
-  cropOpen: "Кадрировать",
-  cropReset: "Убрать обрезку",
-  aspect: "Пропорции",
-  ownSettingsToast: (name: string) => `Правка применена только к ${name} — у файла теперь свои настройки`,
-  undo: "Отменить",
-  close: "Закрыть",
-  exists: (name: string) => `${name} уже существует`,
-  cancelExport: "Отменить экспорт",
-  saveAsNew: "«Сохранить» — под новым именем",
-  newName: "Новое имя файла",
-  save: "Сохранить",
-  overwrite: "Перезаписать",
-  skip: "Пропустить",
-  cancel: "Отмена",
-  applyAll: (n: number) => `Применить ко всем · ещё ${n}`,
-  cropTitle: "Кадрирование",
-  cropRotation: (deg: number) => `· поворот ${deg}°`,
-  cropResetAll: "Сбросить",
-  cropHelp: "Края и углы — обрезать · внутри рамки — двигать · ● — повернуть · Alt или Ctrl — точнее · Shift — поворот по 15°",
-  // 0.1.5
-  viewKind: "Стикер или эмодзи",
-  viewStickerHint: "Показать как стикер",
-  viewEmojiHint: "Показать как эмодзи; проверка тонких линий",
-  originalModified: "Модифицированный SVG",
-  reactionMessage: "Держи весь набор 🙌",
-  reactionHint: "Реакция собеседника",
-  bgClip: "Обрезка по фону",
-  bgClipHint: "Рисунок и его обводка обрезаются по скруглённой рамке фона",
-  resultKind: "Результат",
-  single: "Один файл",
-  singleHint: "Один TGS на весь рисунок",
-  slice: "Нарезка на эмодзи",
-  sliceHint: "Нарезать рисунок на сетку эмодзи — картинку из нескольких эмодзи",
-  cols: "Столбцы",
-  rows: "Строки",
-  autoGrid: "Подобрать сетку по пропорциям рисунка, до 8 в ряд",
-  sliceInfo: (n: number, first: string, last: string) => `${n} эмодзи · файлы ${first} … ${last}, по строкам слева направо`,
-  sliceWide: "Больше 8 в ряд — в Telegram ряды картинки разъедутся переносами",
-  sliceSource: (c: number, r: number) => `Исходный SVG · сетка ${c} × ${r}`,
-  sliceResult: (n: number, size: string) => `Так соберётся в Telegram · ${n} эмодзи, до ${size}`,
-  exportN: (n: number) => `Экспортировать ${n}`,
-  exportOne: (name: string) => `Экспортировать только ${name}`,
-  exportOneTiles: (name: string, n: number) => `Экспортировать только ${name} — ${n} эмодзи из сетки`,
-  exportWait: "Дожидаемся конвертации…",
-  exportErrors: (n: number) => `с ошибкой, не сохранено: ${n}`,
-  scopeSelected: "Выбранных файлов",
-  scopeSelectedHint: (n: number) => `Правки ниже — для ${n} выбранных файлов. Остальные файлы — по своим настройкам.`,
-  selectHint: "Ctrl — добавить к выбору, Shift — выбрать подряд",
-  ownSettingsToastMany: (n: number) => `Правка применена только к выбранным файлам (${n}) — у них теперь свои настройки`,
-};
+      .join(", ");
+  return out as Dict;
+}
 
-type Dict = typeof ru;
+const DICTS: Record<Lang, Dict> = Object.fromEntries(Object.entries(LOCALES).map(([code, raw]) => [code, build(raw)]));
 
-const en: Dict = {
-  add: "Add",
-  addFiles: "Add files",
-  addFolder: "Add folder",
-  includeSubfolders: "Include subfolders",
-  dropTitle: "Drop SVG files here",
-  dropHint: "Files or folders. You can also paste SVG code — Ctrl+V.",
-  dropRelease: "Release to add",
-  files: "Files",
-  onlyProblems: "Only with notes",
-  clear: "Clear",
-  clearHint: "Remove all files from the list",
-  remove: "Remove from list",
-  converting: "Converting…",
-  conversion: "Conversion",
-  countOk: "Clean",
-  countWarn: "With notes",
-  countError: "Failed",
-  ownSettings: "own settings",
-  clipboardName: (n) => `Pasted ${n}`,
-  summary: (ok, warn, err) =>
-    [ok && `${ok} clean`, warn && `${warn} with notes`, err && `${err} failed`].filter(Boolean).join(", "),
-  inChat: "In chat",
-  closeUp: "Close-up",
-  chatLight: "Light chat",
-  chatDark: "Dark chat",
-  checker: "Transparency",
-  original: "Original SVG",
-  result: "As Telegram shows it",
-  chatMessage: "Look what I made",
-  emojiMessage: "New emoji",
-  noPreview: "Preview appears after conversion",
-  allGood: "No notes — ready for Telegram.",
-  fileFailed: "File was not converted",
-  exportPanel: "Export",
-  export: "Export",
-  exportHint: "Save all files in the list as TGS",
-  toSource: "Next to the source",
-  toSourceHint: "Each TGS is saved next to its SVG",
-  choose: "Choose",
-  chooseHint: "Choose the export folder",
-  scopeAllHint: "Settings below apply to all files without their own settings",
-  scopeOneHint2: "Own settings for the selected file only",
-  stickerHint: "Animated sticker: 512×512, up to 64 KB",
-  emojiHint: "Custom emoji: shown inside a text line, thin lines nearly vanish",
-  bounds: "Drawing frame",
-  boundsContainer: "Container",
-  boundsContainerHint: "The whole SVG area, with empty margins",
-  boundsContent: "Edges",
-  boundsContentHint: "The frame hugs the drawing on all sides, including its stroke width",
-  aboutVersion: (v) => `svg2tgs v${v}`,
-  // Название канала — по-русски на любом языке.
-  aboutChannel: "Чайная Аксиома",
-  aboutChannelLink: "Telegram channel",
-  aboutAuthorFull: "Author Grigory Paramonov aka Ax1oMgg",
-  aboutLicenseShort: "MIT license",
-  aboutProjectPage: "Project page",
-  aboutIssues: "Report a problem",
-  aboutEmail: "Write an email",
-  suffix: "Suffix",
-  prefix: "Prefix",
-  subfolder: "Subfolder",
-  exportSettings: "Export settings",
-  scopeAll: "All files",
-  scopeOne: "This file",
-  scopeOneHint: (name) => `Settings below apply only to ${name}. Other files use the common ones.`,
-  outline: "Outline",
-  outlineWidth: "Outline width, px",
-  outlineColor: "Outline color",
-  preset: "Sticker or emoji",
-  sticker: "Sticker",
-  emoji: "Emoji",
-  object: "Object",
-  padding: "Padding",
-  fit: "Fit",
-  fitContain: "Whole",
-  fitContainHint: "Whole picture, transparent margins",
-  fitCover: "Crop",
-  fitCoverHint: "Fill the square, the excess is cropped",
-  background: "Background",
-  radius: "Corner radius",
-  fill: "Fill",
-  fillColor: "Background fill color",
-  borderWidth: "Background outline width, px",
-  borderColor: "Background outline color",
-  optimization: "File size",
-  optAuto: "Auto",
-  optAutoHint: "Fit Telegram's 64 KB limit",
-  optLossless: "Lossless",
-  optLosslessHint: "No outline simplification",
-  optManual: "Manual",
-  optManualHint: "Manual precision",
-  decimals: "Decimal places",
-  advanced: "Advanced",
-  fps: "Frames per second",
-  duration: "Duration, s",
-  telegramDefault: "as Telegram requires",
-  settings: "Settings",
-  closeUnchanged: "Close without changes",
-  done: "Done",
-  language: "Language",
-  theme: "Theme",
-  themeSystem: "System",
-  themeLight: "Light",
-  themeDark: "Dark",
-  saved: (n) => `Saved: ${n}`,
-  skipped: (n) => `skipped: ${n}`,
-  failed: (n) => `failed: ${n}`,
-  openFolder: "Open folder",
-  pastedNeedFolder: "Pasted SVG: choose a folder",
-  browserMode: "Browser mode: sample data",
-  about: "About",
-  version: (v) => `Version ${v}`,
-  aboutProject: "A Chajnaya Axioma project",
-  aboutAuthor: "Author — Ax1oM",
-  aboutLicense: "MIT license, works offline",
-  projectPage: "Project page",
-  resetSection: (title) => `Reset “${title}”`,
-  resetAll: "Reset all export settings",
-  position: "Position",
-  transform: "Transform",
-  styleSection: "Style",
-  fitWidth: "Width",
-  fitWidthHint: "Fit width; the excess at the top and bottom is cropped, move with Y",
-  fitHeight: "Height",
-  fitHeightHint: "Fit height; the excess at the sides is cropped, move with X",
-  fitFree: "Manual",
-  fitFreeHint: "Manual scale",
-  scale: "Scale",
-  positionX: "Position X",
-  positionY: "Position Y",
-  precisionHint: "Alt or Ctrl — smooth and finer · Shift — in steps (rotation by 15°) · Shift+Alt — finer, step 1. Mouse wheel — over a focused field.",
-  flip: "Flip",
-  flipH: "Flip horizontally",
-  flipV: "Flip vertically",
-  rotate: "Rotate",
-  rotateLeft: "Counterclockwise by 90°",
-  rotateRight: "Clockwise by 90°",
-  rotationAngle: "Rotation angle, °",
-  crop: "Crop",
-  cropHint: "Crop and rotate with the mouse in the preview",
-  cropOpen: "Crop",
-  cropReset: "Remove cropping",
-  aspect: "Proportions",
-  ownSettingsToast: (name) => `Edit applied only to ${name} — the file now has its own settings`,
-  undo: "Undo",
-  close: "Close",
-  exists: (name) => `${name} already exists`,
-  cancelExport: "Cancel export",
-  saveAsNew: "“Save” — under a new name",
-  newName: "New file name",
-  save: "Save",
-  overwrite: "Overwrite",
-  skip: "Skip",
-  cancel: "Cancel",
-  applyAll: (n) => `Apply to all · ${n} more`,
-  cropTitle: "Crop",
-  cropRotation: (deg) => `· rotated ${deg}°`,
-  cropResetAll: "Reset",
-  cropHelp: "Edges and corners — crop · inside the frame — move · ● — rotate · Alt or Ctrl — finer · Shift — rotate by 15°",
-  viewKind: "Sticker or emoji",
-  viewStickerHint: "Show as a sticker",
-  viewEmojiHint: "Show as an emoji; thin line check",
-  originalModified: "Modified SVG",
-  reactionMessage: "Here's the whole set 🙌",
-  reactionHint: "Reaction from the other person",
-  bgClip: "Clip to background",
-  bgClipHint: "The drawing and its outline are clipped to the rounded background frame",
-  resultKind: "Result",
-  single: "One file",
-  singleHint: "One TGS for the whole drawing",
-  slice: "Split into emoji",
-  sliceHint: "Split the drawing into a grid of emoji — a picture made of several emoji",
-  cols: "Columns",
-  rows: "Rows",
-  autoGrid: "Fit the grid to the drawing's proportions, up to 8 per row",
-  sliceInfo: (n, first, last) => `${n} emoji · files ${first} … ${last}, row by row, left to right`,
-  sliceWide: "More than 8 per row — Telegram will wrap the rows of the picture",
-  sliceSource: (c, r) => `Original SVG · ${c} × ${r} grid`,
-  sliceResult: (n, size) => `As Telegram assembles it · ${n} emoji, up to ${size}`,
-  exportN: (n) => `Export ${n}`,
-  exportOne: (name) => `Export only ${name}`,
-  exportOneTiles: (name, n) => `Export only ${name} — ${n} emoji of the grid`,
-  exportWait: "Waiting for conversion…",
-  exportErrors: (n) => `failed, not saved: ${n}`,
-  scopeSelected: "Selected files",
-  scopeSelectedHint: (n) => `Edits below apply to ${n} selected files. Other files keep their settings.`,
-  selectHint: "Ctrl — add to selection, Shift — select a range",
-  ownSettingsToastMany: (n) => `Edit applied only to the ${n} selected files — they now have their own settings`,
-};
+/** Есть ли такой перевод. */
+export const hasLang = (lang: string): boolean => lang in LOCALES;
 
-export const strings: Record<Lang, Dict> = { ru, en };
+/** Язык системы, если для него есть перевод (сначала точное совпадение
+ *  вида pt-BR, затем основной язык pt), иначе английский. */
+export function systemLang(): Lang {
+  const prefs = navigator.languages?.length ? navigator.languages : [navigator.language || "en"];
+  for (const tag of prefs) {
+    const exact = Object.keys(LOCALES).find((c) => c.toLowerCase() === tag.toLowerCase());
+    if (exact) return exact;
+    const base = tag.split("-")[0].toLowerCase();
+    if (hasLang(base)) return base;
+  }
+  return hasLang("en") ? "en" : "ru";
+}
 
-const filterNames: Record<Lang, Record<string, string>> = {
-  ru: {
-    blur: "размытие",
-    drop_shadow: "тень",
-    offset: "смещение",
-    color_matrix: "цветовая матрица",
-    lighting: "освещение",
-    turbulence: "шум",
-  },
-  en: {
-    blur: "blur",
-    drop_shadow: "drop shadow",
-    offset: "offset",
-    color_matrix: "color matrix",
-    lighting: "lighting",
-    turbulence: "noise",
-  },
-};
-
-const kb = (b: unknown) => ((b as number) / 1024).toFixed(1);
+/** Тексты на языке `lang` (неизвестный язык — английский). */
+export const strings: Record<Lang, Dict> = new Proxy(DICTS, {
+  get: (target, lang: string) => target[lang] ?? target.en ?? target.ru,
+});
 
 /** Текст замечания для людей. */
 export function warningText(w: Warning, lang: Lang): string {
-  const ru = lang === "ru";
+  const t = strings[lang] as unknown as Record<string, unknown>;
   const p = w as Record<string, unknown>;
-  const filter = filterNames[lang][p.filter as string] ?? (p.filter as string);
-  const text = (() => {
-    switch (w.code) {
-      case "text_converted_to_paths":
-        return ru ? "Текст переведён в кривые" : "Text converted to outlines";
-      case "filter_removed":
-        return ru
-          ? `Эффект «${filter}» в Telegram не поддерживается и убран`
-          : `“${filter}” effect is not supported in Telegram and was removed`;
-      case "mask_removed":
-        return ru ? "Маска не поддерживается и убрана" : "Mask is not supported and was removed";
-      case "image_removed":
-        return ru
-          ? "Растровая картинка внутри SVG не поддерживается и убрана"
-          : "Raster image inside the SVG is not supported and was removed";
-      case "pattern_replaced":
-        return ru ? "Узор заменён серым цветом" : "Pattern replaced with gray";
-      case "blend_mode_ignored":
-        return ru
-          ? `Режим наложения «${p.mode}» не поддерживается, использован обычный`
-          : `Blend mode “${p.mode}” is not supported, normal is used`;
-      case "size_over_limit":
-        return ru
-          ? `Файл ${kb(p.bytes)} КБ при лимите Telegram ${kb(p.limit)} КБ — упростите рисунок`
-          : `File is ${kb(p.bytes)} KB, Telegram allows ${kb(p.limit)} KB — simplify the drawing`;
-      case "text_dropped":
-        return ru ? "Текст пропущен: нет подходящего шрифта" : "Text skipped: no matching font";
-      case "clip_approximated":
-        return ru ? "Сложная обрезка передана приближённо" : "Complex clipping is approximated";
-      case "gradient_approximated":
-        return ru ? "Градиент передан приближённо" : "Gradient is approximated";
-      case "canvas_not_allowed":
-        return ru
-          ? `Канвас ${p.size}×${p.size}, а Telegram требует ${p.required}×${p.required}`
-          : `Canvas is ${p.size}×${p.size}, Telegram requires ${p.required}×${p.required}`;
-      case "fps_not_allowed":
-        return ru
-          ? `${p.fps} кадров/с, а Telegram требует ${p.required}`
-          : `${p.fps} fps, Telegram requires ${p.required}`;
-      case "duration_too_long":
-        return ru
-          ? `Длительность ${(p.secs as number).toFixed(2)} с, Telegram разрешает до ${p.max} с`
-          : `Duration is ${(p.secs as number).toFixed(2)} s, Telegram allows up to ${p.max} s`;
-      case "simplified":
-        return ru
-          ? `Чтобы уложиться в лимит, контуры упрощены — отклонение до ${p.tolerance} px из 512`
-          : `Outlines simplified to fit the limit — up to ${p.tolerance} px off out of 512`;
-      case "too_complex":
-        return ru
-          ? `Слишком сложная фигура (${p.points} точек при пределе ${p.limit}): Telegram её не нарисует`
-          : `Shape is too complex (${p.points} points, limit ${p.limit}): Telegram won't draw it`;
-      case "thin_lines_for_emoji":
-        return ru
-          ? `Линии ${p.width} px из 512 почти пропадут в строке текста — лучше от ${p.recommended} px`
-          : `${p.width} px lines (of 512) will nearly vanish in a text line — use ${p.recommended} px or more`;
-      default:
-        return w.code;
-    }
-  })();
-  return w.element_id ? `${text} (${ru ? "элемент" : "element"} «${w.element_id}»)` : text;
+  const tpl = t[`warn_${w.code}`];
+  if (typeof tpl !== "string") return w.code;
+  const filter = typeof p.filter === "string" ? (t[`filter_${p.filter}`] as string | undefined) ?? p.filter : "";
+  const kb = (b: unknown) => ((b as number) / 1024).toFixed(1);
+  const values: Record<string, Arg> = { ...(p as Record<string, Arg>), filter };
+  if (w.code === "size_over_limit") Object.assign(values, { size: kb(p.bytes), limit: kb(p.limit) });
+  if (w.code === "duration_too_long") values.secs = (p.secs as number).toFixed(2);
+  const text = fill(tpl, values);
+  return w.element_id ? fill(t.warnElement as string, { text, id: w.element_id }) : text;
 }
 
 /** Текст ошибки конвертации. */
 export function errorText(code: string, lang: Lang): string {
-  const ru = lang === "ru";
-  switch (code) {
-    case "read_failed":
-      return ru ? "Не удалось прочитать файл" : "Could not read the file";
-    case "invalid_svg":
-      return ru ? "Файл повреждён или это не SVG" : "The file is damaged or not an SVG";
-    case "empty":
-      return ru ? "В SVG нет ничего видимого" : "Nothing visible in the SVG";
-    case "invalid_option":
-      return ru ? "Неверный цвет — нужен вид #rrggbb" : "Invalid color — use #rrggbb";
-    default:
-      return code;
-  }
+  const tpl = (strings[lang] as unknown as Record<string, unknown>)[`error_${code}`];
+  return typeof tpl === "string" ? tpl : code;
 }
 
 /** Важность замечания: справочное или предупреждение (как `Severity` в core). */

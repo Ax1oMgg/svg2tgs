@@ -6,6 +6,9 @@ export interface ToastData {
   action?: { label: string; run: () => void };
   /** Через сколько мс закрыться само; без него — висит до «×». */
   timeout?: number;
+  /** Закрыться при первом действии пользователя вне уведомления
+   *  (щелчок, клавиша) — для сводок, которые не нужно держать. */
+  dismissOnAction?: boolean;
 }
 
 /**
@@ -17,6 +20,25 @@ export function Toast({ toast, closeLabel, onClose }: { toast: ToastData; closeL
   const paused = useRef(false);
   const close = useRef(onClose);
   close.current = onClose;
+
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!toast.dismissOnAction) return;
+    const onAction = (e: Event) => {
+      if (box.current?.contains(e.target as Node)) return;
+      close.current();
+    };
+    // Подписка — после текущего события (щелчок «Экспортировать» не в счёт).
+    const id = setTimeout(() => {
+      window.addEventListener("pointerdown", onAction, true);
+      window.addEventListener("keydown", onAction, true);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener("pointerdown", onAction, true);
+      window.removeEventListener("keydown", onAction, true);
+    };
+  }, [toast]);
 
   useEffect(() => {
     if (!toast.timeout) return;
@@ -38,6 +60,7 @@ export function Toast({ toast, closeLabel, onClose }: { toast: ToastData; closeL
 
   return (
     <div
+      ref={box}
       className="toast"
       role="status"
       onMouseEnter={() => (paused.current = true)}
@@ -47,7 +70,7 @@ export function Toast({ toast, closeLabel, onClose }: { toast: ToastData; closeL
       {toast.action && (
         <button
           type="button"
-          className="btn btn--link"
+          className="btn btn--link toast__action"
           onClick={() => {
             toast.action!.run();
             onClose();

@@ -6,6 +6,7 @@ import { FileList } from "./components/FileList";
 import { Preview } from "./components/Preview";
 import { ConflictDialog, type ConflictChoice } from "./components/ConflictDialog";
 import { CropEditor } from "./components/CropEditor";
+import { ImportDialog } from "./components/ImportDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
@@ -77,7 +78,12 @@ export function App() {
   const [toast, setToast] = useState<ToastData | null>(null);
   const [cropping, setCropping] = useState(false);
   // Раскрытые разделы панели — только на время работы; при запуске все свёрнуты.
-  const [sections, setSections] = useState<Partial<Record<SectionId, boolean>>>({});
+  // Раскрытые разделы — свои у каждого набора настроек: «all» — общий
+  // для файлов на общих настройках, id файла — у файла со своими.
+  // Только на время работы; при запуске всё свёрнуто.
+  const [sectionsBy, setSectionsBy] = useState<Record<string, Partial<Record<SectionId, boolean>>>>({});
+  // Вставка настроек текстом: открыто ли окно и что в поле.
+  const [importing, setImporting] = useState<{ text: string } | null>(null);
   const [conflict, setConflict] = useState<ConflictAsk | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
   const [version, setVersion] = useState("");
@@ -359,9 +365,11 @@ export function App() {
       // «Открыть папку» — когда всё легло в одну папку.
       const folders = new Set(results.filter((r) => r.path).map((r) => dirname(r.path!)));
       const folder = folders.size === 1 && backend.isTauri() ? [...folders][0] : null;
+      // Сводка пропадает при первом же новом действии.
       setToast({
         text: parts.join(", "),
         action: folder ? { label: t.openFolder, run: () => void backend.openFolder(folder) } : undefined,
+        dismissOnAction: true,
       });
     } finally {
       setConflict(null);
@@ -369,11 +377,56 @@ export function App() {
     }
   };
 
+  // Набор настроек на панели: общий или свой у выбранного файла.
+  const contextKey = scope === "one" && selected ? selected.id : "all";
+  // Свой набор файла начинается с раскрытости общих.
+  const sections = sectionsBy[contextKey] ?? sectionsBy.all ?? {};
+  const onSection = (id: SectionId, open: boolean) =>
+    setSectionsBy((all) => ({ ...all, [contextKey]: { ...(all[contextKey] ?? all.all ?? {}), [id]: open } }));
+
+  /** К чему применится импорт настроек — для подписи в окне. */
+  const importTarget =
+    scope !== "one" || !selected
+      ? t.importTargetAll
+      : chosen.length > 1
+        ? t.importTargetMany(chosen.length)
+        : t.importTargetOwn(selected.name);
+  const applyImported = (o: Options) => {
+    onPanelOptions(o);
+    setImporting(null);
+    setToast({ text: t.settingsApplied, dismissOnAction: true });
+  };
+  const loadSettings = async () => {
+    try {
+      const text = await backend.importOptionsFile();
+      if (text == null) return;
+      const parsed = await backend.parseOptions(text);
+      // Ошибку в файле показывает окно вставки — с текстом файла и местом.
+      if ("options" in parsed) applyImported(parsed.options);
+      else setImporting({ text });
+    } catch {
+      setToast({ text: t.importErr_too_large, dismissOnAction: true });
+    }
+  };
+  const copySettings = async () => {
+    await navigator.clipboard.writeText(await backend.optionsJson(panelOptions));
+    setToast({ text: t.copied, dismissOnAction: true });
+  };
+  const saveSettings = async () => {
+    if (await backend.exportOptionsFile(panelOptions, t.optionsFileName))
+      setToast({ text: t.settingsSaved, dismissOnAction: true });
+  };
+
   const exportPanel = (
     <ExportPanel
-      // Новый файл или область — панель заново берёт из настроек
-      // запомненные цвет фона и параметры обводки.
-      key={scope === "one" ? selected?.id : "all"}
+      // Панель не пересоздаётся при смене файла или области: прокрутка
+      // остаётся на месте, запомненные цвета берутся по contextKey.
+      contextKey={contextKey}
+      aspect={selected?.outcome?.aspect ?? 1}
+      onPasteSettings={() => setImporting({ text: "" })}
+      onLoadSettings={() => void loadSettings()}
+      onCopySettings={() => void copySettings()}
+      onSaveSettings={() => void saveSettings()}
       lang={prefs.lang}
       options={panelOptions}
       onOptions={onPanelOptions}
@@ -386,7 +439,7 @@ export function App() {
       exportPrefs={prefs.export}
       onExportPrefs={(e) => patch({ export: e })}
       sections={sections}
-      onSection={(id, open) => setSections((s) => ({ ...s, [id]: open }))}
+      onSection={onSection}
       onCrop={() => selected && setCropping(true)}
       totalCount={items.length}
       exporting={exporting}
@@ -487,6 +540,16 @@ export function App() {
           existing={conflict.existing}
           rest={conflict.rest}
           onChoose={(choice, all) => conflict.resolve({ choice, all })}
+        />
+      )}
+
+      {importing && (
+        <ImportDialog
+          lang={prefs.lang}
+          target={importTarget}
+          initial={importing.text}
+          onApply={(parsed) => applyImported(parsed.options)}
+          onClose={() => setImporting(null)}
         />
       )}
 

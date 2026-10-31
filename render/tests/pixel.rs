@@ -445,3 +445,37 @@ fn grid_tiles_assemble_into_the_whole_picture() {
         "обводка видна"
     );
 }
+
+/// «По краю» при повороте: рамка считается по самому рисунку после поворота,
+/// поэтому повёрнутый круг занимает то же место, что и без поворота
+/// (раньше рамкой был повёрнутый квадрат вокруг круга — и круг уменьшался).
+#[test]
+fn content_bounds_follow_rotation() {
+    use svg2tgs_core::Bounds;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <circle cx="40" cy="50" r="25" fill="#2f81f7" stroke="#1e9e62" stroke-width="4"/></svg>"##;
+    let still = Options {
+        bounds: Bounds::Content,
+        ..Options::default()
+    };
+    let turned = Options {
+        rotation: 45.0,
+        ..still.clone()
+    };
+    let a = render_tgs(&convert(svg, &still).unwrap().tgs, SIZE, 0).unwrap();
+    let b = render_tgs(&convert(svg, &turned).unwrap().tgs, SIZE, 0).unwrap();
+    assert_close("content-rotation", &a, &b);
+    // Превью исходника считает так же.
+    assert_close(
+        "content-rotation-preview",
+        &a,
+        &render_svg(svg, SIZE, &turned).unwrap(),
+    );
+    // «По контейнеру» поворот рамку увеличивает — картинка другая.
+    let boxed = Options {
+        rotation: 45.0,
+        ..Options::default()
+    };
+    let c = render_tgs(&convert(svg, &boxed).unwrap().tgs, SIZE, 0).unwrap();
+    assert!(compare(&a, &c).bad_ratio > MAX_BAD);
+}

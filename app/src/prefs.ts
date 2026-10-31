@@ -1,6 +1,6 @@
 /** Настройки, которые программа помнит между запусками (localStorage окна). */
 
-import type { Lang } from "./i18n";
+import { hasLang, systemLang, type Lang } from "./i18n";
 import { DEFAULT_OPTIONS, type Options } from "./types";
 
 export type Theme = "system" | "light" | "dark";
@@ -38,7 +38,8 @@ export interface Prefs {
 const KEY = "svg2tgs.prefs.v1";
 
 export function defaultPrefs(): Prefs {
-  const lang: Lang = (navigator.language || "ru").toLowerCase().startsWith("ru") ? "ru" : "en";
+  // Язык системы, если для него есть перевод, иначе английский.
+  const lang: Lang = systemLang();
   return {
     options: DEFAULT_OPTIONS,
     lang,
@@ -68,6 +69,8 @@ export function loadPrefs(): Prefs {
       ...base,
       ...saved,
       previewKind: kind,
+      // Перевод могли убрать — тогда язык системы.
+      lang: saved.lang && hasLang(saved.lang) ? saved.lang : base.lang,
       options: migrateOptions({ ...base.options, ...saved.options }),
       export: offAtStart({ ...base.export, ...saved.export }),
     };

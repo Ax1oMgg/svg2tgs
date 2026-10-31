@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
 import type { ExportPrefs, Toggle } from "../prefs";
@@ -38,6 +38,12 @@ interface Props {
   selectedCount: number;
   /** Сетка, по которой нарезан выбранный файл (подобранная, если авто). */
   actualGrid: [number, number] | null;
+  /** Пропорции выбранного рисунка после трансформаций (ширина / высота). */
+  aspect: number;
+  /** Какой набор настроек на панели («all» или id файла): при смене
+   *  панель не пересоздаётся (прокрутка на месте), а запомненные цвета
+   *  и толщины берутся из нового набора. */
+  contextKey: string;
   exportPrefs: ExportPrefs;
   onExportPrefs: (e: ExportPrefs) => void;
   /** Какие разделы раскрыты. */
@@ -52,6 +58,11 @@ interface Props {
   onChooseDir: () => void;
   /** Открыть кадрирование мышью в превью. */
   onCrop: () => void;
+  /** Импорт и экспорт настроек («Дополнительно»). */
+  onPasteSettings: () => void;
+  onLoadSettings: () => void;
+  onCopySettings: () => void;
+  onSaveSettings: () => void;
 }
 
 const ALL_KEYS = [...Object.values(SECTION_KEYS).flat(), ...GRID_KEYS];
@@ -125,6 +136,19 @@ export function ExportPanel(p: Props) {
     setBorder(next);
     set({ background_border: next });
   };
+
+  // Другой набор настроек — запомненные цвета и толщины берутся из него.
+  const firstContext = useRef(p.contextKey);
+  useEffect(() => {
+    if (firstContext.current === p.contextKey) return;
+    firstContext.current = p.contextKey;
+    setColor(options.background.kind === "solid" ? options.background.color : "#ffffff");
+    setOutline(options.outline ?? DEFAULT_OUTLINE);
+    setBorder(options.background_border ?? DEFAULT_BORDER);
+    setRotBase(baseOf(options.rotation ?? 0));
+    // Только при смене набора, не при каждой правке.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.contextKey]);
 
   const cropped = !!options.crop;
   const rotation = options.rotation ?? 0;
@@ -338,6 +362,25 @@ export function ExportPanel(p: Props) {
               >
                 <WandIcon />
               </button>
+            </div>
+            {/* Размер сетки: столбцы, строки — по пропорциям рисунка. */}
+            <div className="field field--slider">
+              <div className="range-scale" aria-hidden="true">
+                <span>{t.gridBigger}</span>
+                <span>{t.gridFiner}</span>
+              </div>
+              <Range
+                value={shownGrid[0]}
+                min={1}
+                max={MAX_GRID}
+                coarse={2}
+                label={t.gridSize}
+                onChange={(v) => {
+                  const cols = Math.max(1, Math.round(v));
+                  const rows = Math.max(1, Math.min(MAX_GRID, Math.round(cols / (p.aspect > 0 ? p.aspect : 1))));
+                  set({ grid: { cols, rows }, grid_auto: false });
+                }}
+              />
             </div>
             <p className="hint">{t.sliceInfo(tiles, `${base}_${pad2(1)}`, `${base}_${pad2(tiles)}`)}</p>
             {shownGrid[0] > AUTO_GRID_COLS && <p className="note note--warn">{t.sliceWide}</p>}
@@ -610,6 +653,43 @@ export function ExportPanel(p: Props) {
               />
             </label>
           )}
+          {/* Настройки текстом (JSON ядра, как у svg2tgs --options): для того,
+              что сейчас правится; папка и имена файлов не входят. */}
+          <div className="field settings-io">
+            <div className="field__label">{t.settingsImport}</div>
+            <div className="settings-io__row">
+              <button type="button" className="btn btn--default" title={t.pasteHint} onClick={p.onPasteSettings}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect width="8" height="4" x="8" y="2" rx="1" />
+                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                </svg>
+                {t.paste}
+              </button>
+              <button type="button" className="btn btn--default" title={t.fromFileHint} onClick={p.onLoadSettings}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+                  <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                  <path d="M12 12v6" />
+                  <path d="m15 15-3-3-3 3" />
+                </svg>
+                {t.fromFile}
+              </button>
+            </div>
+            <div className="field__label">{t.settingsExport}</div>
+            <div className="settings-io__row">
+              <button type="button" className="btn btn--default" title={t.copyHint} onClick={p.onCopySettings}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect width="14" height="14" x="8" y="8" rx="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+                {t.copy}
+              </button>
+              <button type="button" className="btn btn--default" title={t.toFileHint} onClick={p.onSaveSettings}>
+                <FileDownIcon />
+                {t.toFile}
+              </button>
+            </div>
+          </div>
         </div>,
       )}
       </div>

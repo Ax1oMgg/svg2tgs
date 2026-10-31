@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod messages;
 
-use clap::{Parser, ValueEnum};
+use clap::parser::ValueSource;
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use serde::Serialize;
 use svg2tgs_core::{
     Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, Severity, Warning,
@@ -132,6 +133,11 @@ struct Cli {
     /// Длительность, секунды (Telegram разрешает до 3).
     #[arg(long)]
     duration: Option<f32>,
+
+    /// Настройки из файла .json (кнопка «В файл…» в программе). Флаги,
+    /// заданные в командной строке, действуют поверх файла.
+    #[arg(long, value_name = "ФАЙЛ")]
+    options: Option<PathBuf>,
 
     /// Вывести отчёт в JSON вместо текста (для скриптов).
     #[arg(long)]
@@ -435,6 +441,46 @@ fn process(src: &Path, dst: Option<&Path>, options: &Options, grid: Option<GridA
     report
 }
 
+/// Настройки из файла `--options`; текст ошибки — для человека.
+fn load_options(path: &Path) -> Result<Options, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Не удалось прочитать {}: {e}", path.display()))?;
+    Options::from_json(&text)
+        .map(|p| p.options)
+        .map_err(|e| format!("{}: {}", path.display(), messages::options_error(&e)))
+}
+
+/// Флаги, заданные в командной строке (`given`), — поверх настроек из файла.
+fn with_given_flags(mut base: Options, flags: Options, given: impl Fn(&str) -> bool) -> Options {
+    macro_rules! take {
+        ($($id:literal => $($field:ident),+);* $(;)?) => {
+            $( if given($id) { $( base.$field = flags.$field.clone(); )+ } )*
+        };
+    }
+    take! {
+        "preset" => preset;
+        "padding" => padding;
+        "fit" => fit;
+        "bounds" => bounds;
+        "scale" => scale;
+        "position" => position_x, position_y;
+        "flip_h" => flip_h;
+        "flip_v" => flip_v;
+        "rotate" => rotation;
+        "aspect" => aspect;
+        "crop" => crop;
+        "no_bg_clip" => background_clip;
+        "bg" => background;
+        "bg_radius" => background_radius;
+        "bg_border" => background_border;
+        "outline" => outline;
+        "optimize" => optimization;
+        "fps" => fps;
+        "duration" => duration_secs;
+    }
+    base
+}
+
 /// Пути файлов клеток: `имя.tgs` → `имя_01.tgs`, `имя_02.tgs`… (номер —
 /// с нулями до общей длины); без нарезки — сам `dst`.
 fn tile_paths(dst: &Path, n: usize) -> Vec<PathBuf> {
@@ -466,8 +512,12 @@ fn enable_utf8_console() {}
 
 fn main() -> ExitCode {
     enable_utf8_console();
-    let cli = Cli::parse();
-    let options = Options {
+    let matches = Cli::command().get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(c) => c,
+        Err(e) => e.exit(),
+    };
+    let flags = Options {
         preset: match cli.preset {
             PresetArg::Sticker => Preset::Sticker,
             PresetArg::Emoji => Preset::Emoji,
@@ -504,6 +554,18 @@ fn main() -> ExitCode {
         fps: cli.fps,
         duration_secs: cli.duration,
         ..Options::default()
+    };
+    let options = match &cli.options {
+        None => flags,
+        Some(path) => match load_options(path) {
+            Ok(base) => with_given_flags(base, flags, |id| {
+                matches.value_source(id) == Some(ValueSource::CommandLine)
+            }),
+            Err(text) => {
+                eprintln!("{text}");
+                return ExitCode::from(1);
+            }
+        },
     };
 
     let files = match collect_inputs(&cli.inputs, cli.recursive) {
@@ -618,6 +680,22 @@ fn print_human(reports: &[Report], options: &Options) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flags_override_options_file() {
+        let base = Options {
+            rotation: 30.0,
+            padding: 0.1,
+            ..Options::default()
+        };
+        let flags = Options {
+            rotation: 90.0,
+            ..Options::default()
+        };
+        let o = with_given_flags(base, flags, |id| id == "rotate");
+        assert_eq!(o.rotation, 90.0);
+        assert_eq!(o.padding, 0.1, "не заданный флаг не трогает файл");
+    }
 
     #[test]
     fn grid_argument_and_tile_names() {

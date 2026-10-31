@@ -89,6 +89,8 @@ export interface Outcome {
   tgsBytes: number | null;
   /** Сетка нарезки `[столбцы, строки]`, `[1, 1]` — один файл. */
   grid: [number, number];
+  /** Соотношение сторон рисунка после трансформаций (ширина / высота). */
+  aspect: number;
   warnings: Warning[];
   error: string | null;
 }
@@ -195,6 +197,19 @@ export function resetKeys(o: Options, keys: readonly (keyof Options)[]): Options
   const out: Options = { ...o };
   for (const k of keys) (out as unknown as Record<string, unknown>)[k] = DEFAULT_OPTIONS[k] ?? null;
   return out;
+}
+
+/** Ошибка чтения настроек из текста (`svg2tgs_core::OptionsError`). */
+export interface OptionsError {
+  code: "syntax" | "value" | "not_object" | "newer_format" | string;
+  line: number;
+  column: number;
+}
+
+/** Прочитанные из текста настройки: сами настройки и сколько полей узнано. */
+export interface ParsedOptions {
+  options: Options;
+  known: number;
 }
 
 /** Файл, который уже есть в папке экспорта (`files::Existing`). */

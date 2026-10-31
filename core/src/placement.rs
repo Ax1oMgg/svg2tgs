@@ -78,13 +78,94 @@ pub fn board_size(tile: f32, grid: Grid) -> (f32, f32) {
 /// Соотношение сторон рисунка после трансформаций и обрезки (ширина / высота) —
 /// по нему подбирается сетка нарезки.
 pub fn shaped_aspect(rect: [f32; 4], options: &Options) -> f32 {
-    let (_, crop) = shape(rect, options);
+    let (_, crop) = shape(rect, options, None);
     (crop[2] - crop[0]) / (crop[3] - crop[1])
+}
+
+/// То же для дерева: в режиме «По краю» — по самому рисунку после поворота.
+pub fn tree_aspect(tree: &usvg::Tree, options: &Options) -> f32 {
+    let rect = source_rect(tree, options);
+    let (_, crop) = shape(rect, options, content_measure(tree, options).as_ref());
+    (crop[2] - crop[0]) / (crop[3] - crop[1])
+}
+
+/// Размещение рисунка из дерева: рамка по [`source_rect`], а в режиме
+/// «По краю» — точные границы рисунка уже после отражения, пропорций
+/// и поворота (повёрнутый круг не уменьшается).
+pub fn place_tree(tree: &usvg::Tree, tile: f32, grid: Grid, options: &Options) -> Placement {
+    let rect = source_rect(tree, options);
+    place_with(
+        rect,
+        tile,
+        grid,
+        options,
+        content_measure(tree, options).as_ref(),
+    )
+}
+
+/// Измеритель рамки рисунка после матрицы — только для «По краю».
+type Measure<'a> = Box<dyn Fn(&Transform) -> Option<[f32; 4]> + 'a>;
+
+fn content_measure<'a>(tree: &'a usvg::Tree, options: &Options) -> Option<Measure<'a>> {
+    if options.bounds != Bounds::Content {
+        return None;
+    }
+    let (dw, dh) = (tree.size().width(), tree.size().height());
+    Some(Box::new(move |m: &Transform| {
+        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        content_bounds(tree.root(), m, &mut b);
+        if b[2] <= b[0] || b[3] <= b[1] {
+            return None;
+        }
+        // Видно только то, что внутри области документа.
+        let d = bounds(m, dw, dh);
+        let r = [
+            b[0].max(d[0]),
+            b[1].max(d[1]),
+            b[2].min(d[2]),
+            b[3].min(d[3]),
+        ];
+        (r[2] - r[0] > 1e-3 && r[3] - r[1] > 1e-3).then_some(r)
+    }))
+}
+
+/// Точные границы видимых контуров группы после матрицы `m`, с толщиной обводок.
+fn content_bounds(g: &usvg::Group, m: &Transform, b: &mut [f32; 4]) {
+    for node in g.children() {
+        match node {
+            usvg::Node::Group(child) => content_bounds(child, m, b),
+            usvg::Node::Text(t) => content_bounds(t.flattened(), m, b),
+            usvg::Node::Path(p) if p.is_visible() => {
+                let t = m.pre_concat(p.abs_transform());
+                let Some(r) = p
+                    .data()
+                    .clone()
+                    .transform(t)
+                    .and_then(|d| d.compute_tight_bounds())
+                else {
+                    continue;
+                };
+                // Половина обводки — с масштабом матрицы.
+                let half = p.stroke().map_or(0.0, |s| {
+                    let k = ((t.sx * t.sy - t.kx * t.ky).abs()).sqrt();
+                    s.width().get() * k / 2.0
+                });
+                *b = [
+                    b[0].min(r.left() - half),
+                    b[1].min(r.top() - half),
+                    b[2].max(r.right() + half),
+                    b[3].max(r.bottom() + half),
+                ];
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Отразить, растянуть, повернуть — вокруг центра рисунка; затем рамка
 /// обрезки в получившихся координатах (центр рисунка — начало координат).
-fn shape(rect: [f32; 4], options: &Options) -> (Transform, [f32; 4]) {
+/// `measure` — для «По краю»: рамка самого рисунка после этих шагов.
+fn shape(rect: [f32; 4], options: &Options, measure: Option<&Measure>) -> (Transform, [f32; 4]) {
     let [rx, ry, w, h] = rect;
     let fx = if options.flip_h { -1.0 } else { 1.0 };
     let fy = if options.flip_v { -1.0 } else { 1.0 };
@@ -94,8 +175,11 @@ fn shape(rect: [f32; 4], options: &Options) -> (Transform, [f32; 4]) {
         .pre_scale(fx, fy)
         .pre_translate(-rx - w / 2.0, -ry - h / 2.0);
 
-    // Рамка повёрнутого рисунка.
-    let b = bounds(&shape.pre_translate(rx, ry), w, h);
+    // Рамка повёрнутого рисунка: «По краю» — по самому рисунку,
+    // иначе — повёрнутый прямоугольник рамки.
+    let b = measure
+        .and_then(|f| f(&shape))
+        .unwrap_or_else(|| bounds(&shape.pre_translate(rx, ry), w, h));
     let Some(c) = options.crop else {
         return (shape, b);
     };
@@ -129,7 +213,17 @@ fn shape(rect: [f32; 4], options: &Options) -> (Transform, [f32; 4]) {
 /// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
 /// на холсте из `grid` канвасов стороной `tile`.
 pub fn place(rect: [f32; 4], tile: f32, grid: Grid, options: &Options) -> Placement {
-    let (shape, crop) = shape(rect, options);
+    place_with(rect, tile, grid, options, None)
+}
+
+fn place_with(
+    rect: [f32; 4],
+    tile: f32,
+    grid: Grid,
+    options: &Options,
+    measure: Option<&Measure>,
+) -> Placement {
+    let (shape, crop) = shape(rect, options, measure);
     let (cw, ch) = ((crop[2] - crop[0]).max(1e-6), (crop[3] - crop[1]).max(1e-6));
 
     // Вписать в рабочую область: холст минус отступ (доля канваса)
@@ -283,8 +377,8 @@ mod tests {
             rotation: 30.0,
             ..still.clone()
         };
-        let (_, a) = shape(size(100.0, 100.0), &still);
-        let (_, b) = shape(size(100.0, 100.0), &turned);
+        let (_, a) = shape(size(100.0, 100.0), &still, None);
+        let (_, b) = shape(size(100.0, 100.0), &turned, None);
         for (x, y) in a.iter().zip(b) {
             assert!((x - y).abs() < 1e-4, "{a:?} {b:?}");
         }
