@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
-import { strings } from "../i18n";
+import { LANGS, strings } from "../i18n";
 import { Dropdown } from "./Dropdown";
 import { SegButton } from "./Preview";
 import type { Theme } from "../prefs";
@@ -68,10 +68,7 @@ export function SettingsDialog({ lang, theme, version, onApply, onClose }: Props
         <Dropdown
           label={t.language}
           value={draftLang}
-          options={[
-            { value: "ru", label: "Русский" },
-            { value: "en", label: "English" },
-          ]}
+          options={LANGS.map((l) => ({ value: l.code, label: l.name }))}
           onChange={setDraftLang}
         />
       </div>

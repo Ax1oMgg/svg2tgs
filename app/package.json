@@ -1,13 +1,14 @@
 {
   "name": "svg2tgs-app",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/check-locales.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check-locales": "node scripts/check-locales.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

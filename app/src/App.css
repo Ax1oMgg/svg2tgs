@@ -583,9 +583,11 @@ input[type="color"]:disabled {
   overflow: hidden;
 }
 
+/* Мозаика нарезки не квадратная — вписывается целиком, с полями. */
 .file__thumb img {
   width: 100%;
   height: 100%;
+  object-fit: contain;
 }
 
 .file__body {
@@ -739,8 +741,10 @@ input[type="color"]:disabled {
   color: var(--color-danger);
 }
 
-/* «Как в чате» — главный элемент интерфейса */
+/* «Как в чате» — главный элемент интерфейса. Ширина области чата — для
+   правила «широкий чат» ниже. */
 .chat {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -987,6 +991,7 @@ input.range--center::-webkit-slider-runnable-track {
   width: 112px;
   flex: none;
   cursor: pointer;
+  font-weight: var(--font-weight-medium);
 }
 
 .opt-row input:not([type]),
@@ -1020,11 +1025,14 @@ input.range--center::-webkit-slider-runnable-track {
   gap: var(--space-2);
 }
 
+/* Иерархия текста панели: раздел — жирный и основного цвета, название
+   настройки — средний и приглушённый, подсказки — обычные. */
 .field__label {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
   padding: 0;
 }
@@ -1059,6 +1067,12 @@ input.range--center::-webkit-slider-runnable-track {
   align-items: center;
   gap: 6px;
   list-style: none;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.sec .sec__chev {
+  color: var(--color-text-muted);
 }
 
 .sec::-webkit-details-marker {
@@ -1234,6 +1248,21 @@ details[open] > .sec .sec__chev {
 
 .toast .btn--link {
   color: var(--color-accent-soft);
+}
+
+/* Уведомление — в обратных цветах темы, поэтому наведение и нажатие
+   кнопки берут не общий --color-hover, а лёгкий слой цвета текста
+   уведомления: читается и в светлой, и в тёмной теме. */
+.toast .toast__action:hover {
+  background: color-mix(in srgb, var(--color-surface) 16%, transparent);
+}
+
+.toast .toast__action:active {
+  background: color-mix(in srgb, var(--color-surface) 26%, transparent);
+}
+
+.toast .toast__action:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-surface);
 }
 
 .toast__close {
@@ -1739,11 +1768,6 @@ details[open] > .sec .sec__chev {
   height: 28px;
 }
 
-/* Главный из выбранных файлов — с полоской слева. */
-.file--current {
-  box-shadow: inset 3px 0 0 var(--color-accent);
-}
-
 /* «О программе»: иконка слева, название и канал справа. */
 .about__head {
   display: flex;
@@ -1851,4 +1875,158 @@ details[open] > .sec .sec__chev {
 .closeup__frame img.closeup__mosaic {
   aspect-ratio: auto;
   height: auto;
+}
+
+/* Широкий чат — как в Telegram Desktop: когда область чата шире порога,
+   свои сообщения тоже встают слева, хвостик пузыря — слева внизу. Порог
+   подобран на глаз (точного числа Telegram не публикует). */
+@container (min-width: 720px) {
+  .chat .chat__row--out {
+    justify-content: flex-start;
+  }
+
+  .chat--light .bubble--out,
+  .chat--dark .bubble--out {
+    border-bottom-right-radius: var(--radius-bubble);
+    border-bottom-left-radius: 4px;
+  }
+}
+
+/* Строка файла: рамка фокуса — только при работе с клавиатуры, не после
+   щелчка мышью (в том числе с Ctrl/Shift для выбора нескольких). */
+.files__list[data-pointer] .file:focus-visible {
+  outline: none;
+}
+
+/* «Дополнительно»: импорт и экспорт настроек. */
+.settings-io {
+  gap: var(--space-2);
+}
+
+.settings-io__row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-io__row .btn {
+  flex: 1;
+  justify-content: center;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+/* Окно «Вставить настройки». */
+.dialog--import {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.dialog--import .dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.import__text {
+  width: 100%;
+  box-sizing: border-box;
+  height: 180px;
+  resize: vertical;
+  padding: var(--space-2) 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font: var(--font-size-xs) / 1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.import__text--bad {
+  border-color: var(--color-danger);
+}
+
+.import__ok {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-success);
+}
+
+.note--error {
+  background: var(--color-danger-soft);
+  color: var(--color-text);
+}
+
+/* «Крупно»: окошко с масштабом и сдвигом (общими для обеих половин). */
+.zoompane {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+  overflow: hidden;
+  cursor: zoom-in;
+  touch-action: none;
+  user-select: none;
+}
+
+.zoompane--zoomed {
+  cursor: grab;
+}
+
+.zoompane--grabbing {
+  cursor: grabbing;
+}
+
+.zoompane__content {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+}
+
+.closeup__frame .zoompane img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+}
+
+.zoompane .slice-src {
+  max-width: none;
+  height: 100%;
+}
+
+/* Полоса масштаба под обеими половинами. */
+.zoombar {
+  grid-column: 1 / -1;
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--space-1) / 2);
+  padding: calc(var(--space-1) / 2);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.zoombar .btn--icon {
+  width: 28px;
+  height: 28px;
+}
+
+.zoombar__value {
+  min-width: 5ch;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.zoombar__sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-1);
+  background: var(--color-border);
+}
+
+.zoombar__fit {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
 }

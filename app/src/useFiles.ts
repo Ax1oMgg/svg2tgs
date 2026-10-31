@@ -76,7 +76,7 @@ export function useFiles(options: Options) {
           if (fresh()) {
             update(id, {
               status: "error",
-              outcome: { id, tgsBytes: null, grid: [1, 1], warnings: [], error: "read_failed" },
+              outcome: { id, tgsBytes: null, grid: [1, 1], aspect: 1, warnings: [], error: "read_failed" },
             });
           }
         })

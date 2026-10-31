@@ -287,3 +287,120 @@ impl Options {
         (frames as u32).max(1)
     }
 }
+
+/// Метка формата файла настроек (`Options::to_json`). Номер меняется, только
+/// если старые файлы перестанут читаться как есть.
+pub const OPTIONS_FORMAT: &str = "svg2tgs-options/1";
+
+/// Почему не удалось прочитать настройки из текста. Текст для людей
+/// делают интерфейс и CLI по коду.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OptionsError {
+    /// `syntax` — не JSON; `value` — у поля значение не того вида;
+    /// `not_object` — не объект `{…}`; `newer_format` — файл от более новой версии.
+    pub code: &'static str,
+    /// Строка и столбец (с 1), если известны.
+    pub line: usize,
+    pub column: usize,
+}
+
+/// Прочитанные настройки и сколько полей в тексте узнано.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedOptions {
+    pub options: Options,
+    pub known: usize,
+}
+
+impl Options {
+    /// Настройки текстом (JSON с меткой формата) — для копирования и файла.
+    pub fn to_json(&self) -> String {
+        let mut v = serde_json::to_value(self).expect("настройки всегда сериализуются");
+        if let serde_json::Value::Object(map) = &mut v {
+            let mut out = serde_json::Map::new();
+            out.insert("format".into(), OPTIONS_FORMAT.into());
+            out.extend(std::mem::take(map));
+            v = serde_json::Value::Object(out);
+        }
+        serde_json::to_string_pretty(&v).expect("JSON в память")
+    }
+
+    /// Настройки из текста. Неизвестные поля пропускаются, недостающие —
+    /// по умолчанию; метка формата необязательна.
+    pub fn from_json(text: &str) -> Result<ParsedOptions, OptionsError> {
+        let err = |code, e: &serde_json::Error| OptionsError {
+            code,
+            line: e.line(),
+            column: e.column(),
+        };
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| err("syntax", &e))?;
+        let Some(map) = value.as_object() else {
+            return Err(OptionsError {
+                code: "not_object",
+                line: 1,
+                column: 1,
+            });
+        };
+        if let Some(f) = map.get("format").and_then(|f| f.as_str()) {
+            let newer = f
+                .strip_prefix("svg2tgs-options/")
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some_and(|n| n > 1);
+            if newer {
+                return Err(OptionsError {
+                    code: "newer_format",
+                    line: 1,
+                    column: 1,
+                });
+            }
+        }
+        // Значения не того вида — с местом ошибки в исходном тексте.
+        let options: Options = serde_json::from_str(text).map_err(|e| err("value", &e))?;
+        let fields = serde_json::to_value(Options::default()).expect("сериализация");
+        let known = map
+            .keys()
+            .filter(|k| fields.get(k.as_str()).is_some())
+            .count();
+        Ok(ParsedOptions { options, known })
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+
+    #[test]
+    fn options_roundtrip_through_text() {
+        let o = Options {
+            rotation: 45.0,
+            grid: Some(Grid { cols: 8, rows: 5 }),
+            outline: Some(Outline::default()),
+            ..Options::default()
+        };
+        let text = o.to_json();
+        assert!(text.contains(OPTIONS_FORMAT));
+        let back = Options::from_json(&text).unwrap();
+        assert_eq!(back.options, o);
+    }
+
+    #[test]
+    fn partial_and_unknown_fields() {
+        let p = Options::from_json(r#"{"rotation": 30, "something": 1}"#).unwrap();
+        assert_eq!(p.options.rotation, 30.0);
+        assert_eq!(p.known, 1);
+        assert_eq!(p.options.fit, Fit::Contain);
+    }
+
+    #[test]
+    fn errors_have_codes_and_places() {
+        let e = Options::from_json("{\n  \"rotation\": \"сорок\"\n}").unwrap_err();
+        assert_eq!((e.code, e.line), ("value", 2));
+        assert_eq!(Options::from_json("{oops").unwrap_err().code, "syntax");
+        assert_eq!(Options::from_json("[1]").unwrap_err().code, "not_object");
+        assert_eq!(
+            Options::from_json(r#"{"format": "svg2tgs-options/2"}"#)
+                .unwrap_err()
+                .code,
+            "newer_format"
+        );
+    }
+}

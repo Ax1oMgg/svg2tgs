@@ -21,9 +21,12 @@ use std::io::Write;
 use std::sync::{Arc, OnceLock};
 
 pub use options::{
-    Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, MAX_OUTLINE,
+    Background, Bounds, Crop, Fit, Grid, Optimization, Options, OptionsError, Outline,
+    ParsedOptions, Preset, MAX_OUTLINE, OPTIONS_FORMAT,
 };
-pub use placement::{board_size, place, shaped_aspect, source_rect, Placement};
+pub use placement::{
+    board_size, place, place_tree, shaped_aspect, source_rect, tree_aspect, Placement,
+};
 
 /// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -177,7 +180,7 @@ const AUTO_LADDER: [(u8, f64); 7] = [
 /// Сетка нарезки по пропорциям рисунка после трансформаций и обрезки,
 /// не больше `max_cols` столбцов (см. [`Grid::auto`]).
 pub fn auto_grid(tree: &usvg::Tree, options: &Options, max_cols: u32) -> Grid {
-    Grid::auto(shaped_aspect(source_rect(tree, options), options), max_cols)
+    Grid::auto(tree_aspect(tree, options), max_cols)
 }
 
 /// Итог нарезки: сетка (подобранная, если `grid_auto`) и файлы клеток
@@ -186,6 +189,9 @@ pub fn auto_grid(tree: &usvg::Tree, options: &Options, max_cols: u32) -> Grid {
 pub struct Tiles {
     pub grid: Grid,
     pub tiles: Vec<Conversion>,
+    /// Соотношение сторон рисунка после трансформаций и обрезки
+    /// (ширина / высота) — для ползунка размера сетки.
+    pub aspect: f32,
 }
 
 /// Конвертирует SVG (содержимое файла) в TGS. Нарезка (`Options::grid`)
@@ -214,6 +220,7 @@ pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
         options.grid = Some(auto_grid(&tree, &options, Grid::AUTO_COLS));
     }
     let options = &options;
+    let aspect = tree_aspect(&tree, options);
     let board = Board::new(&tree, options, outline_rgb)?;
 
     let ladder: Vec<(u8, f64)> = match options.optimization {
@@ -248,6 +255,7 @@ pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
     Ok(Tiles {
         grid: board.grid,
         tiles: out,
+        aspect,
     })
 }
 
@@ -350,7 +358,7 @@ impl Board {
         let tile = options.effective_canvas_size();
         let (w, h) = placement::board_size(tile as f32, grid);
         let (w, h) = (w as f64, h as f64);
-        let placement = place(source_rect(tree, options), tile as f32, grid, options);
+        let placement = place_tree(tree, tile as f32, grid, options);
         let background = background_plan_for(options, w, h)?;
         let frame = (options.background_clip
             && (background.fill.is_some() || background.border.is_some()))

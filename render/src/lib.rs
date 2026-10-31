@@ -177,12 +177,7 @@ pub fn render_svg(svg: &[u8], size: u32, options: &Options) -> Result<Image, Ren
     let tile = options.effective_canvas_size() as f32;
     let (bw, bh) = svg2tgs_core::board_size(tile, grid);
     let background = svg2tgs_core::background_plan_for(options, bw as f64, bh as f64)?;
-    let placement = svg2tgs_core::place(
-        svg2tgs_core::source_rect(&tree, options),
-        tile,
-        grid,
-        options,
-    );
+    let placement = svg2tgs_core::place_tree(&tree, tile, grid, options);
     let k = size as f32 / bw.max(bh);
     let (iw, ih) = (
         ((bw * k).round() as u32).max(1),

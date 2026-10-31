@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { errorText, isInfo, strings, warningText } from "../i18n";
@@ -24,6 +24,23 @@ interface Props {
 }
 
 const SIZE = 512;
+/** Шаги масштаба в «Крупно». */
+const ZOOMS = [1, 1.5, 2, 3, 4, 6, 8];
+/** Самое большое превью при увеличении (длинная сторона, px). */
+const MAX_HI = 2048;
+
+/** Масштаб и сдвиг «Крупно» — общие для обеих половин. Сдвиг — в долях
+ *  стороны окошка, от центра. */
+interface View {
+  zoom: number;
+  x: number;
+  y: number;
+}
+const FIT: View = { zoom: 1, x: 0, y: 0 };
+const clampView = (v: View): View => {
+  const lim = (v.zoom - 1) / 2;
+  return { zoom: v.zoom, x: Math.max(-lim, Math.min(lim, v.x)), y: Math.max(-lim, Math.min(lim, v.y)) };
+};
 
 /**
  * Сцена превью. «Как в чате» — стикер в диалоге Telegram (эмодзи — в строке
@@ -37,6 +54,10 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
     svg: null,
     tgs: null,
   });
+
+  const [view, setView] = useState<View>(FIT);
+  // Картинки в большем разрешении — при увеличении, чтобы не мылились.
+  const [hi, setHi] = useState<{ svg: string | null; tgs: string | null; size: number }>({ svg: null, tgs: null, size: 0 });
 
   // Перерисовка — когда меняется результат (статус, размер, сетка нарезки).
   const key = item ? `${item.id}:${item.status}:${item.outcome?.tgsBytes}:${item.outcome?.grid?.join("x")}` : "";
@@ -56,6 +77,36 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
     // Перерисовка — только когда меняется сам результат.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // Другой файл — масштаб сначала.
+  useEffect(() => setView(FIT), [item?.id]);
+
+  // Увеличенное превью: длинная сторона ≈ 512 × масштаб (не больше MAX_HI),
+  // с паузой — не на каждый щелчок колёсика.
+  const hiSize = Math.min(MAX_HI, Math.ceil((SIZE * view.zoom) / 256) * 256);
+  useEffect(() => {
+    if (!item || mode !== "closeup" || hiSize <= SIZE || item.status === "pending" || item.status === "error") return;
+    if (hi.size === hiSize && hi.svg) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void Promise.all([backend.preview(item.id, "svg", hiSize), backend.preview(item.id, "tgs", hiSize)]).then(
+        ([svg, tgs]) => !cancelled && setHi({ svg, tgs, size: hiSize }),
+      );
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, hiSize, mode]);
+  useEffect(() => setHi({ svg: null, tgs: null, size: 0 }), [key]);
+  const svgImg = view.zoom > 1 && hi.svg ? hi.svg : images.svg;
+  const tgsImg = view.zoom > 1 && hi.tgs ? hi.tgs : images.tgs;
+  const zoomStep = (dir: 1 | -1) => {
+    const i = ZOOMS.findIndex((z) => z >= view.zoom - 1e-6);
+    const z = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, (i < 0 ? ZOOMS.length - 1 : i) + dir))];
+    setView((v) => clampView({ zoom: z, x: (v.x * z) / v.zoom, y: (v.y * z) / v.zoom }));
+  };
 
   const chatBg = bg === "dark" ? "dark" : "light";
   const grid = item?.outcome?.grid ?? [1, 1];
@@ -118,12 +169,14 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
         {!cropEditor && item && item.status !== "error" && mode === "closeup" && (
           <div className="closeup">
             <figure className={`closeup__frame bg-${bg}`}>
-              {images.svg ? (
-                sliced ? (
-                  <GridOverlay grid={grid} image={images.svg} />
-                ) : (
-                  <img src={images.svg} alt={modified ? t.originalModified : t.original} />
-                )
+              {svgImg ? (
+                <ZoomPane view={view} onView={setView} aspect={sliced ? grid[0] / grid[1] : 1} hint={t.zoomHint}>
+                  {sliced ? (
+                    <GridOverlay grid={grid} image={svgImg} />
+                  ) : (
+                    <img src={svgImg} alt={modified ? t.originalModified : t.original} draggable={false} />
+                  )}
+                </ZoomPane>
               ) : (
                 <Spinner />
               )}
@@ -132,8 +185,10 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
               </figcaption>
             </figure>
             <figure className={`closeup__frame bg-${bg}`}>
-              {images.tgs ? (
-                <img className={sliced ? "closeup__mosaic" : undefined} src={images.tgs} alt={t.result} />
+              {tgsImg ? (
+                <ZoomPane view={view} onView={setView} aspect={sliced ? grid[0] / grid[1] : 1} hint={t.zoomHint}>
+                  <img src={tgsImg} alt={t.result} draggable={false} />
+                </ZoomPane>
               ) : (
                 <Spinner />
               )}
@@ -144,6 +199,20 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
                 {!sliced && item.outcome?.tgsBytes != null && ` · ${formatSize(item.outcome.tgsBytes, lang)}`}
               </figcaption>
             </figure>
+            {/* Масштаб — общий для обеих половин. */}
+            <div className="zoombar" role="toolbar" aria-label={t.zoomBar}>
+              <button type="button" className="btn btn--text btn--icon" title={t.zoomOut} aria-label={t.zoomOut} disabled={view.zoom <= ZOOMS[0]} onClick={() => zoomStep(-1)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 12h14" /></svg>
+              </button>
+              <span className="zoombar__value">{Math.round(view.zoom * 100)} %</span>
+              <button type="button" className="btn btn--text btn--icon" title={t.zoomIn} aria-label={t.zoomIn} disabled={view.zoom >= ZOOMS[ZOOMS.length - 1]} onClick={() => zoomStep(1)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+              </button>
+              <span className="zoombar__sep" aria-hidden="true" />
+              <button type="button" className="btn btn--text zoombar__fit" title={t.zoomFitHint} disabled={view === FIT || (view.zoom === 1 && view.x === 0 && view.y === 0)} onClick={() => setView(FIT)}>
+                {t.zoomFit}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -164,6 +233,90 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
         </section>
       )}
     </main>
+  );
+}
+
+/**
+ * Окошко с масштабом и сдвигом. Колёсико — масштаб вокруг курсора,
+ * перетаскивание — сдвиг, двойной щелчок — 100 %. Состояние общее
+ * (`view`), поэтому второе окошко повторяет всё 1 в 1.
+ */
+function ZoomPane({
+  view,
+  onView,
+  aspect,
+  hint,
+  children,
+}: {
+  view: View;
+  onView: (v: View | ((old: View) => View)) => void;
+  aspect: number;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; y: number } | null>(null);
+  const [grabbing, setGrabbing] = useState(false);
+
+  // Колёсико — не пассивный слушатель, чтобы не прокручивать окно.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      // Точка под курсором — от центра, в долях стороны.
+      const cx = (e.clientX - r.left) / r.width - 0.5;
+      const cy = (e.clientY - r.top) / r.height - 0.5;
+      onView((v) => {
+        const i = ZOOMS.findIndex((z) => z >= v.zoom - 1e-6);
+        const next = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, (i < 0 ? ZOOMS.length - 1 : i) + (e.deltaY < 0 ? 1 : -1)))];
+        const k = next / v.zoom;
+        return clampView({ zoom: next, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k });
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onView]);
+
+  return (
+    <div
+      ref={ref}
+      className={`zoompane${view.zoom > 1 ? " zoompane--zoomed" : ""}${grabbing ? " zoompane--grabbing" : ""}`}
+      style={{ aspectRatio: String(aspect) }}
+      title={hint}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, y: e.clientY };
+        setGrabbing(true);
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (!d) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        const dx = (e.clientX - d.x) / r.width;
+        const dy = (e.clientY - d.y) / r.height;
+        drag.current = { x: e.clientX, y: e.clientY };
+        onView((v) => clampView({ ...v, x: v.x + dx, y: v.y + dy }));
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+        setGrabbing(false);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setGrabbing(false);
+      }}
+      onDoubleClick={() => onView(FIT)}
+    >
+      <div
+        className="zoompane__content"
+        style={{ transform: `translate(${view.x * 100}%, ${view.y * 100}%) scale(${view.zoom})` }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 

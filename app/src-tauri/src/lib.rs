@@ -83,6 +83,8 @@ struct Outcome {
     tgs_bytes: Option<usize>,
     /// Сетка нарезки `[столбцы, строки]`; `[1, 1]` — один файл.
     grid: [u32; 2],
+    /// Соотношение сторон рисунка после трансформаций (ширина / высота).
+    aspect: f32,
     warnings: Vec<Warning>,
     /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`.
     error: Option<String>,
@@ -121,6 +123,7 @@ async fn convert(
                     id: id.clone(),
                     tgs_bytes: out.tiles.iter().map(|c| c.tgs_bytes()).max(),
                     grid: [out.grid.cols, out.grid.rows],
+                    aspect: out.aspect,
                     warnings,
                     error: None,
                 };
@@ -167,6 +170,7 @@ impl Outcome {
             id: id.to_string(),
             tgs_bytes: None,
             grid: [1, 1],
+            aspect: 1.0,
             warnings: Vec::new(),
             error: Some(code.to_string()),
         }
@@ -199,7 +203,8 @@ async fn preview(
     let Some(item) = state.items.lock().unwrap().get(&id).cloned() else {
         return Ok(None);
     };
-    let size = size.clamp(16, 1024);
+    // До 2048 — для увеличения в «Крупно».
+    let size = size.clamp(16, 2048);
     tauri::async_runtime::spawn_blocking(move || {
         let image = match kind {
             PreviewKind::Svg => {
@@ -303,6 +308,87 @@ fn open_folder(path: String, app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Прочитанные из текста настройки.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParsedOptions {
+    options: Options,
+    /// Сколько полей текста узнано.
+    known: usize,
+}
+
+/// Настройки из текста (вставка или файл) — разбирает ядро.
+#[tauri::command]
+fn parse_options(text: String) -> Result<ParsedOptions, svg2tgs_core::OptionsError> {
+    svg2tgs_core::Options::from_json(&text).map(|p| ParsedOptions {
+        options: p.options,
+        known: p.known,
+    })
+}
+
+/// Настройки текстом — для копирования и файла.
+#[tauri::command]
+fn options_json(options: Options) -> String {
+    options.to_json()
+}
+
+/// Самый большой файл настроек, который стоит читать.
+const MAX_OPTIONS_FILE: u64 = 1024 * 1024;
+
+/// Выбрать файл настроек и прочитать его текст. Диалог открывается здесь,
+/// в Rust: окно не передаёт пути к файлам и не может прочитать что угодно.
+#[tauri::command]
+async fn import_options_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(picked) = app
+            .dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        if size > MAX_OPTIONS_FILE {
+            return Err("too_large".into());
+        }
+        std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Сохранить настройки в файл, выбранный в диалоге (тоже здесь, в Rust).
+/// `false` — пользователь отменил.
+#[tauri::command]
+async fn export_options_file(
+    options: Options,
+    name: String,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(picked) = app
+            .dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .set_file_name(&name)
+            .blocking_save_file()
+        else {
+            return Ok(false);
+        };
+        let path = picked.into_path().map_err(|e| e.to_string())?;
+        std::fs::write(path, options.to_json()).map_err(|e| e.to_string())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Ссылки из «О программе».
 #[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
@@ -346,6 +432,10 @@ pub fn run() {
             source_size,
             open_folder,
             open_link,
+            parse_options,
+            options_json,
+            import_options_file,
+            export_options_file,
         ])
         .run(tauri::generate_context!())
         .expect("не удалось запустить приложение");

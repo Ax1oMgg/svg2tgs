@@ -7,7 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Existing, Options, Outcome, SaveRequest, Saved, Source } from "./types";
+import { DEFAULT_OPTIONS, type Existing, type Options, type OptionsError, type Outcome, type ParsedOptions, type SaveRequest, type Saved, type Source } from "./types";
 
 export interface AppInfo {
   version: string;
@@ -25,7 +25,7 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export async function getAppInfo(): Promise<AppInfo> {
   if (!isTauri()) {
-    return { version: "0.1.5", coreVersion: "0.1.5", runtime: "browser" };
+    return { version: "0.1.6", coreVersion: "0.1.6", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -86,6 +86,59 @@ export async function save(requests: SaveRequest[]): Promise<Saved[]> {
 
 export async function openFolder(path: string): Promise<void> {
   if (isTauri()) await invoke("open_folder", { path });
+}
+
+/* ----------------------------- Настройки текстом ---------------------------- */
+
+/** Разобрать настройки из текста (ядро): настройки или ошибка с местом. */
+export async function parseOptions(text: string): Promise<ParsedOptions | OptionsError> {
+  if (isTauri()) {
+    try {
+      return await invoke<ParsedOptions>("parse_options", { text });
+    } catch (e) {
+      return e as OptionsError;
+    }
+  }
+  // Браузерный режим: как в ядре — объект, неизвестные поля пропускаются.
+  try {
+    const v = JSON.parse(text);
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return { code: "not_object", line: 1, column: 1 };
+    const known = Object.keys(v).filter((k) => k in DEFAULT_OPTIONS).length;
+    const picked = Object.fromEntries(Object.entries(v).filter(([k]) => k in DEFAULT_OPTIONS));
+    return { options: { ...DEFAULT_OPTIONS, ...picked } as Options, known };
+  } catch {
+    return { code: "syntax", line: 1, column: 1 };
+  }
+}
+
+/** Настройки текстом — для копирования. */
+export async function optionsJson(options: Options): Promise<string> {
+  if (isTauri()) return invoke<string>("options_json", { options });
+  return JSON.stringify({ format: "svg2tgs-options/1", ...options }, null, 2);
+}
+
+/** Выбрать файл настроек и прочитать его; `null` — отменено. */
+export async function importOptionsFile(): Promise<string | null> {
+  if (isTauri()) return invoke<string | null>("import_options_file");
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = () => void (input.files?.[0]?.text().then(resolve) ?? resolve(null));
+    input.click();
+  });
+}
+
+/** Сохранить настройки в файл; `false` — отменено. */
+export async function exportOptionsFile(options: Options, name: string): Promise<boolean> {
+  if (isTauri()) return invoke<boolean>("export_options_file", { options, name });
+  const blob = new Blob([await optionsJson(options)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return true;
 }
 
 export type Link = "project" | "issues" | "telegram" | "email";
@@ -168,17 +221,16 @@ const mock = {
         ? source.text
         : SAMPLE_SVGS[source.path.split("/").pop() ?? ""] ?? SAMPLE_SVGS["star.svg"];
     if (!text.includes("<svg")) {
-      return { id, tgsBytes: null, grid: [1, 1], warnings: [], error: "invalid_svg" };
+      return { id, tgsBytes: null, grid: [1, 1], aspect: 1, warnings: [], error: "invalid_svg" };
     }
     mock.svgs.set(id, text);
     // Нарезка: авто — по пропорциям viewBox, до 8 в ряд (как в ядре).
     let grid: [number, number] = [1, 1];
+    const vb = text.match(/viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/);
+    const aspect = vb ? Number(vb[1]) / Number(vb[2]) : 1;
     if (options.grid) {
       grid = [options.grid.cols, options.grid.rows];
-      if (options.grid_auto !== false) {
-        const vb = text.match(/viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/);
-        grid = autoGrid(vb ? Number(vb[1]) / Number(vb[2]) : 1);
-      }
+      if (options.grid_auto !== false) grid = autoGrid(aspect);
     }
     mock.grids.set(id, grid[0] * grid[1]);
     const warnings =
@@ -187,7 +239,7 @@ const mock = {
         : options.preset === "emoji" && text.includes("stroke-width")
           ? [{ code: "thin_lines_for_emoji", width: 8.5, recommended: 12 }]
           : [];
-    return { id, tgsBytes: 300 + text.length * 2, grid, warnings, error: null };
+    return { id, tgsBytes: 300 + text.length * 2, grid, aspect, warnings, error: null };
   },
 
   async preview(id: string): Promise<string | null> {

@@ -164,3 +164,40 @@ fn grid_splits_into_numbered_emoji() {
     let tiles = json(&out)[0]["tiles"].as_array().unwrap().len();
     assert!(tiles > 1 && tiles <= 8 * 20, "{tiles}");
 }
+
+#[test]
+fn options_file_with_flags_on_top() {
+    let dir = tmp("options");
+    let file = dir.join("settings.json");
+    std::fs::write(
+        &file,
+        r#"{"format": "svg2tgs-options/1", "grid": {"cols": 2, "rows": 1}, "grid_auto": false}"#,
+    )
+    .unwrap();
+    let out = bin()
+        .arg(fixtures().join("shapes-basic.svg"))
+        .arg("-o")
+        .arg(&dir)
+        .arg("--options")
+        .arg(&file)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(json(&out)[0]["tiles"].as_array().unwrap().len(), 2);
+
+    std::fs::write(&file, "{\"rotation\": \"сорок\"}").unwrap();
+    let bad = bin()
+        .arg(fixtures().join("shapes-basic.svg"))
+        .arg("--options")
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("строка 1"));
+}
