@@ -25,7 +25,8 @@ pub const TOKEN_VAR: &str = "SVG2TGS_BOT_TOKEN";
         Владелец наборов — тот, кто последним написал боту /start, или --user-id.\n\n\
         Примеры:\n  \
         svg2tgs publish ./tgs --title \"Сердечки\" --kind emoji --emoji ❤️\n  \
-        svg2tgs publish ./tgs --title \"Сердечки\" --kind emoji --emoji ❤️ --resume\n\n\
+        svg2tgs publish ./tgs --title \"Сердечки\" --kind emoji --emoji ❤️ --resume\n  \
+        svg2tgs publish ./new --append --name serdechki --emoji ❤️\n\n\
         Коды выхода: 0 — набор готов, 1 — неверные параметры, 2 — ошибка выгрузки."
 )]
 pub struct PublishCli {
@@ -33,9 +34,9 @@ pub struct PublishCli {
     #[arg(required = true)]
     inputs: Vec<PathBuf>,
 
-    /// Название набора (1–64 символа).
-    #[arg(long)]
-    title: String,
+    /// Название набора (1–64 символа). При --append не нужно.
+    #[arg(long, required_unless_present = "append")]
+    title: Option<String>,
 
     /// Адрес набора без окончания `_by_<бот>`; по умолчанию — из названия.
     #[arg(long)]
@@ -52,6 +53,15 @@ pub struct PublishCli {
     /// Набор уже есть (выгрузка оборвалась) — дописать недостающее.
     #[arg(long)]
     resume: bool,
+
+    /// Дописать файлы в существующий набор этого бота (адрес — --name).
+    #[arg(long, requires = "name", conflicts_with = "resume")]
+    append: bool,
+
+    /// Сколько стикеров было в наборе до первой попытки --append — чтобы
+    /// после обрыва дописать только оставшееся (программа подскажет число).
+    #[arg(long, requires = "append")]
+    base: Option<usize>,
 
     /// Числовой id владельца в Telegram, если не хотите писать боту /start.
     #[arg(long)]
@@ -150,14 +160,33 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
                 None => n,
             }
         })
-        .unwrap_or_else(|| rules::stem_from_title(&cli.title, &me.username));
+        .unwrap_or_else(|| {
+            rules::stem_from_title(cli.title.as_deref().unwrap_or(""), &me.username)
+        });
+    let name = rules::set_name(&stem, &me.username);
+    let kind = match cli.kind {
+        KindArg::Sticker => SetKind::Stickers,
+        KindArg::Emoji => SetKind::Emoji,
+    };
+    // Дописывание: название и тип — у набора, база — сколько в нём сейчас.
+    let (title, kind, append) = if cli.append {
+        let set = match bot.get_set(&name) {
+            Ok(Some(set)) => set,
+            Ok(None) => return fail(cli.json, &PublishError::SetMissing { name }),
+            Err(f) => return fail(cli.json, &PublishError::from_failure(f, 0)),
+        };
+        (
+            set.title,
+            set.kind.unwrap_or(kind),
+            Some(cli.base.unwrap_or(set.count)),
+        )
+    } else {
+        (cli.title.clone().unwrap_or_default(), kind, None)
+    };
     let job = Job {
-        kind: match cli.kind {
-            KindArg::Sticker => SetKind::Stickers,
-            KindArg::Emoji => SetKind::Emoji,
-        },
-        name: rules::set_name(&stem, &me.username),
-        title: cli.title.clone(),
+        kind,
+        name,
+        title,
         items: files
             .iter()
             .map(|p| Item {
@@ -170,6 +199,7 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
             })
             .collect(),
         resume: cli.resume,
+        append,
     };
 
     if !cli.json {
@@ -221,7 +251,14 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
         Err(e) => {
             let code = fail(cli.json, &e);
             if !cli.json && e.done().is_some() {
-                eprintln!("  Уже выгруженное осталось в наборе: повторите команду с --resume.");
+                match job.append {
+                    Some(base) => eprintln!(
+                        "  Уже дописанное осталось в наборе: повторите команду с --base {base}."
+                    ),
+                    None => eprintln!(
+                        "  Уже выгруженное осталось в наборе: повторите команду с --resume."
+                    ),
+                }
             }
             code
         }

@@ -42,6 +42,10 @@ pub struct Job {
     /// Набор с таким именем уже есть — дописать недостающее
     /// (продолжение после обрыва). Иначе это ошибка «имя занято».
     pub resume: bool,
+    /// Дописать в существующий набор: сколько в нём было стикеров до первой
+    /// попытки. Всё, что сверх этого, — уже дописанные файлы задания
+    /// (так продолжение после обрыва не повторяет их). `None` — новый набор.
+    pub append: Option<usize>,
 }
 
 /// Ход выгрузки.
@@ -143,35 +147,66 @@ pub fn run<T: Transport>(
         .map_err(|f| PublishError::from_failure(f, 0))?;
 
     // `from` — с какого файла продолжать; `resumed_from` — сколько уже было в наборе.
-    let (from, resumed_from) = match existing {
-        Some(_) if !job.resume => {
-            return Err(PublishError::NameTaken {
-                name: job.name.clone(),
-            })
+    let (from, resumed_from) = if let Some(base) = job.append {
+        let name = job.name.clone();
+        let Some(set) = existing else {
+            return Err(PublishError::SetMissing { name });
+        };
+        if set.kind.is_some_and(|k| k != job.kind) {
+            return Err(PublishError::KindMismatch { name });
         }
-        Some(set) if set.count > total => {
+        let Some(already) = set.count.checked_sub(base).filter(|&a| a <= total) else {
             return Err(PublishError::SetMismatch {
-                name: job.name.clone(),
+                name,
                 existing: set.count,
-                planned: total,
-            })
+                planned: base + total,
+            });
+        };
+        let max = job.kind.capacity();
+        if base + total > max {
+            return Err(PublishError::TooMany {
+                count: base + total,
+                max,
+            });
         }
-        Some(set) => {
+        if already > 0 {
             progress(Progress {
-                done: set.count,
+                done: already,
                 total,
             });
-            (set.count, set.count)
         }
-        None => {
-            if stop.load(Ordering::Relaxed) {
-                return Err(PublishError::Stopped { done: 0 });
+        (already, already)
+    } else {
+        match existing {
+            Some(_) if !job.resume => {
+                return Err(PublishError::NameTaken {
+                    name: job.name.clone(),
+                })
             }
-            let first = upload(bot, owner, &job.items[0], 0)?;
-            bot.create_set(owner, &job.name, &job.title, job.kind, &[first])
-                .map_err(|f| create_error(f, &job.name))?;
-            progress(Progress { done: 1, total });
-            (1, 0)
+            Some(set) if set.count > total => {
+                return Err(PublishError::SetMismatch {
+                    name: job.name.clone(),
+                    existing: set.count,
+                    planned: total,
+                })
+            }
+            Some(set) => {
+                progress(Progress {
+                    done: set.count,
+                    total,
+                });
+                (set.count, set.count)
+            }
+            None => {
+                if stop.load(Ordering::Relaxed) {
+                    return Err(PublishError::Stopped { done: 0 });
+                }
+                let first = upload(bot, owner, &job.items[0], 0)?;
+                bot.create_set(owner, &job.name, &job.title, job.kind, &[first])
+                    .map_err(|f| create_error(f, &job.name))?;
+                progress(Progress { done: 1, total });
+                (1, 0)
+            }
         }
     };
     for index in from..total {

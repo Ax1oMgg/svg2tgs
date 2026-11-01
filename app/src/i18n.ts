@@ -69,6 +69,10 @@ const PARAMS = {
   pubGo: ["n"],
   pubProgress: ["done", "total"],
   pubDoneText: ["n", "title"],
+  pubFound: ["title", "count", "free"],
+  pubFoundNoRoom: ["title", "count", "free", "n"],
+  pubGoAppend: ["n"],
+  pubDoneAppend: ["n", "title"],
 } as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
 
 type Key = Exclude<keyof typeof ru, `_${string}`>;
