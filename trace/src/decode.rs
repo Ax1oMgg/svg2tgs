@@ -83,15 +83,21 @@ fn png(bytes: &[u8]) -> Result<Rgba, Error> {
     let data = &buf[..frame.buffer_size()];
     let px: Vec<[u8; 4]> = match frame.color_type {
         png::ColorType::Rgba => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2], c[3]])
             .collect(),
         png::ColorType::Rgb => data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2], 255])
             .collect(),
         png::ColorType::GrayscaleAlpha => data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| [c[0], c[0], c[0], c[1]])
             .collect(),
         png::ColorType::Grayscale => data.iter().map(|&g| [g, g, g, 255]).collect(),
@@ -118,7 +124,9 @@ fn jpeg(bytes: &[u8]) -> Result<Rgba, Error> {
     let orientation = decoder.exif().map_or(1, |e| exif_orientation(e));
     let data = decoder.decode().map_err(|e| bad(format!("{e:?}")))?;
     let px: Vec<[u8; 4]> = data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| [c[0], c[1], c[2], 255])
         .collect();
     if px.len() != (w * h) as usize {
@@ -140,11 +148,15 @@ fn webp(bytes: &[u8]) -> Result<Rgba, Error> {
     let mut buf = vec![0; size];
     decoder.read_image(&mut buf).map_err(bad)?;
     let px: Vec<[u8; 4]> = if decoder.has_alpha() {
-        buf.chunks_exact(4)
+        buf.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2], c[3]])
             .collect()
     } else {
-        buf.chunks_exact(3)
+        buf.as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2], 255])
             .collect()
     };
