@@ -1,7 +1,7 @@
 /** Настройки, которые программа помнит между запусками (localStorage окна). */
 
 import { hasLang, systemLang, type Lang } from "./i18n";
-import { DEFAULT_OPTIONS, type Options } from "./types";
+import { DEFAULT_OPTIONS, stripExt, type Options } from "./types";
 
 export type Theme = "system" | "light" | "dark";
 export type PreviewMode = "chat" | "closeup";
@@ -106,7 +106,7 @@ export function savePrefs(p: Prefs): void {
 
 /** Имя результата без расширения: префикс + имя исходника + суффикс. */
 export function exportName(fileName: string, e: ExportPrefs): string {
-  const base = fileName.replace(/\.svg$/i, "");
+  const base = stripExt(fileName);
   const prefix = e.prefix.on ? e.prefix.value : "";
   const suffix = e.suffix.on ? e.suffix.value : "";
   return `${prefix}${base}${suffix}`;

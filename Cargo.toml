@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["core", "render", "publish", "cli", "web", "app/src-tauri"]
-default-members = ["core", "render", "publish", "cli"]
+members = ["core", "trace", "render", "publish", "cli", "web", "app/src-tauri"]
+default-members = ["core", "trace", "render", "publish", "cli"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -13,6 +13,7 @@ authors = ["Парамонов Григорий aka Ax1oMgg <chajnayaaxioma@gmai
 
 [workspace.dependencies]
 svg2tgs-core = { path = "core" }
+svg2tgs-trace = { path = "trace" }
 svg2tgs-render = { path = "render" }
 svg2tgs-publish = { path = "publish" }
 serde = { version = "1", features = ["derive"] }

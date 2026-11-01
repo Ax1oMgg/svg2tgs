@@ -515,3 +515,144 @@ fn cover_under_smaller_limit_still_matches() {
     let result = render_tgs(&cover.tgs, 100, 0).unwrap();
     assert_close("cover", &reference, &result);
 }
+
+// --------------------------- Трассировка картинок ---------------------------
+//
+// Эталон — сама картинка (resvg рисует её через `preview_svg` в тех же
+// координатах), результат — TGS после трассировки глазами rlottie.
+// Трассировка приближённая, поэтому допуски шире, чем у SVG.
+
+fn raster_dir() -> PathBuf {
+    fixtures_dir().join("raster")
+}
+
+/// Трассирует `bytes` и сравнивает rlottie-рендер с картинкой.
+fn traced_diff(name: &str, bytes: &[u8], options: &Options) -> (Diff, svg2tgs_trace::Traced) {
+    let t = svg2tgs_trace::convert_grid(bytes, options).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let preview = svg2tgs_trace::preview_svg(bytes, options).unwrap();
+    let reference = render_svg(&preview, SIZE, options).unwrap();
+    let result = render_tgs(&t.tiles.tiles[0].tgs, SIZE, 0).unwrap();
+    let diff = compare(&reference, &result);
+    if diff.mean > 1.0 {
+        std::fs::create_dir_all(diff_dir()).unwrap();
+        let out = diff_dir().join(format!("trace-{name}.png"));
+        std::fs::write(&out, diff_sheet(&reference, &result).to_png()).unwrap();
+    }
+    (diff, t)
+}
+
+#[test]
+fn traced_pictures_look_like_the_pictures() {
+    // (файл, средняя разница не больше, доля заметно отличающихся пикселей)
+    let cases = [
+        ("gradient-button.png", 2.0, 0.03),
+        ("pixel-art.png", 1.0, 0.01),
+        ("star.webp", 1.0, 0.01),
+        ("logo-white.jpg", 2.5, 0.03),
+        // Фото — постер: сравнивается только общий вид.
+        ("photo.jpg", 14.0, 0.6),
+    ];
+    let mut failures = Vec::new();
+    for (name, max_mean, max_bad) in cases {
+        let bytes = std::fs::read(raster_dir().join(name)).unwrap();
+        let (d, t) = traced_diff(name, &bytes, &Options::default());
+        eprintln!(
+            "{name:22} {:?}, {} цв., разница {:.2}, заметно {:.2}%",
+            t.info.preset,
+            t.info.colors,
+            d.mean,
+            d.bad_ratio * 100.0
+        );
+        assert!(
+            t.tiles.tiles[0].tgs.len() <= 64 * 1024,
+            "{name}: больше лимита"
+        );
+        if d.mean > max_mean || d.bad_ratio > max_bad {
+            failures.push(format!(
+                "{name}: разница {:.2} (допуск {max_mean}), заметно {:.2}% (допуск {:.0}%)",
+                d.mean,
+                d.bad_ratio * 100.0,
+                max_bad * 100.0
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn auto_picks_the_right_method() {
+    use svg2tgs_core::TracePreset;
+    for (name, want) in [
+        ("gradient-button.png", TracePreset::Drawing),
+        ("pixel-art.png", TracePreset::Pixel),
+        ("photo.jpg", TracePreset::Photo),
+        ("logo-white.jpg", TracePreset::Drawing),
+    ] {
+        let bytes = std::fs::read(raster_dir().join(name)).unwrap();
+        let t = svg2tgs_trace::convert_grid(&bytes, &Options::default()).unwrap();
+        assert_eq!(t.info.preset, want, "{name}");
+    }
+}
+
+#[test]
+fn smooth_transition_becomes_a_gradient_not_bands() {
+    // Без градиентов — полосы; с ними — одна заливка, и она точнее.
+    let bytes = std::fs::read(raster_dir().join("gradient-button.png")).unwrap();
+    let on = Options::default();
+    let off = Options {
+        trace: svg2tgs_core::Trace {
+            gradients: Some(false),
+            ..Default::default()
+        },
+        ..Options::default()
+    };
+    let (d_on, t_on) = traced_diff("button-gradients", &bytes, &on);
+    let (d_off, t_off) = traced_diff("button-bands", &bytes, &off);
+    assert_eq!(t_on.info.gradient_count, 1);
+    assert_eq!(t_off.info.gradient_count, 0);
+    assert!(t_on.svg.contains("linearGradient"));
+    assert!(
+        d_on.mean < d_off.mean,
+        "градиент {:.2}, полосы {:.2}",
+        d_on.mean,
+        d_off.mean
+    );
+}
+
+#[test]
+fn transparency_fade_becomes_an_opacity_gradient() {
+    // Сплошной цвет, непрозрачность плавно спадает слева направо: rlottie
+    // рисует точки непрозрачности градиента так же, как resvg.
+    let (w, h) = (240u32, 160u32);
+    let mut img = svg2tgs_render::Image::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let a = (255.0 * (1.0 - x as f32 / w as f32)).round() as u8;
+            img.rgba[i..i + 4].copy_from_slice(&[40, 120, 220, a]);
+        }
+    }
+    let bytes = img.to_png();
+    let (d, t) = traced_diff("fade", &bytes, &Options::default());
+    assert_eq!(t.info.gradient_count, 1, "{}", t.svg);
+    assert!(t.svg.contains("stop-opacity"));
+    assert!(d.mean < 2.0, "разница {:.2}", d.mean);
+}
+
+#[test]
+fn traced_grid_tiles_line_up() {
+    // Нарезка картинки: клетки вплотную совпадают с картинкой.
+    let bytes = std::fs::read(raster_dir().join("gradient-button.png")).unwrap();
+    let options = Options {
+        grid: Some(svg2tgs_core::Grid { cols: 3, rows: 3 }),
+        ..Options::default()
+    };
+    let t = svg2tgs_trace::convert_grid(&bytes, &options).unwrap();
+    assert_eq!(t.tiles.tiles.len(), 9);
+    let preview = svg2tgs_trace::preview_svg(&bytes, &options).unwrap();
+    let reference = render_svg(&preview, 240, &options).unwrap();
+    let tiles: Vec<Vec<u8>> = t.tiles.tiles.iter().map(|c| c.tgs.clone()).collect();
+    let result = render_tgs_grid(&tiles, 3, 80).unwrap();
+    let d = compare(&reference, &result);
+    assert!(d.mean < 2.5, "разница {:.2}", d.mean);
+}

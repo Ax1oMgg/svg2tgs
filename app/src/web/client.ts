@@ -78,7 +78,8 @@ interface Picked {
 const registry = new Map<string, Picked>();
 let added = 0;
 
-const isSvg = (name: string) => /\.svg$/i.test(name);
+/** SVG или картинка, которую можно трассировать. */
+const isSvg = (name: string) => /\.(svg|png|jpe?g|webp)$/i.test(name);
 
 /** Запомнить файлы; `rel` — путь внутри выбранной папки или имя файла. */
 function register(files: { file: File; rel: string }[]): string[] {
@@ -100,7 +101,7 @@ export function pickPaths(kind: "files" | "folder"): Promise<string[]> {
     input.type = "file";
     if (kind === "files") {
       input.multiple = true;
-      input.accept = ".svg,image/svg+xml";
+      input.accept = ".svg,image/svg+xml,.png,image/png,.jpg,.jpeg,image/jpeg,.webp,image/webp";
     } else {
       input.webkitdirectory = true;
     }

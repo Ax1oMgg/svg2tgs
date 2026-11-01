@@ -17,6 +17,7 @@ mod options;
 mod placement;
 mod report;
 pub mod telegram;
+mod trace;
 
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
@@ -39,6 +40,7 @@ pub struct BackgroundPlan {
     pub radius: f64,
 }
 pub use report::{Conversion, Severity, Warning, WarningCode};
+pub use trace::{PathMode, Trace, TraceInfo, TraceParams, TracePreset, MAX_DETAILS};
 
 /// usvg той же версии, что использует ядро, — для рендера эталона (resvg).
 pub use usvg;
@@ -58,6 +60,29 @@ pub enum Error {
     /// Некорректный параметр конвертации.
     #[error("некорректный параметр: {0}")]
     InvalidOption(String),
+    /// Растровая картинка повреждена или в неподдерживаемом формате.
+    #[error("не удалось прочитать картинку: {0}")]
+    InvalidImage(String),
+    /// Анимированная картинка (GIF, анимированный WebP или PNG) — не переводится.
+    #[error("анимированные картинки не поддерживаются")]
+    AnimatedImage,
+    /// Картинка больше допустимого размера (пиксели).
+    #[error("картинка слишком большая: {0}×{1}")]
+    ImageTooLarge(u32, u32),
+}
+
+impl Error {
+    /// Машинный код ошибки — для интерфейса и CLI.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::InvalidSvg(_) => "invalid_svg",
+            Error::Empty => "empty",
+            Error::InvalidOption(_) => "invalid_option",
+            Error::InvalidImage(_) => "invalid_image",
+            Error::AnimatedImage => "animated_image",
+            Error::ImageTooLarge(..) => "image_too_large",
+        }
+    }
 }
 
 /// Шрифты, которыми ядро переводит `<text>` в кривые.
@@ -305,6 +330,21 @@ const AUTO_LADDER: [(u8, f64); 7] = [
 /// не больше `max_cols` столбцов (см. [`Grid::auto`]).
 pub fn auto_grid(tree: &usvg::Tree, options: &Options, max_cols: u32) -> Grid {
     Grid::auto(tree_aspect(tree, options), max_cols)
+}
+
+/// Сколько пикселей холста приходится на единицу рисунка с рамкой `rect`
+/// (`[x, y, w, h]` в координатах документа) и какая получится сетка —
+/// для выбора рабочего размера трассировки растра до самой трассировки.
+pub fn board_scale(rect: [f32; 4], options: &Options) -> (f64, Grid) {
+    let grid = if options.grid.is_some() && options.grid_auto {
+        Grid::auto(shaped_aspect(rect, options), Grid::AUTO_COLS)
+    } else {
+        options.grid()
+    };
+    let tile = options.effective_canvas_size() as f32;
+    let m = place(rect, tile, grid, options).transform;
+    let det = (m.sx as f64 * m.sy as f64 - m.kx as f64 * m.ky as f64).abs();
+    (det.sqrt(), grid)
 }
 
 /// Итог нарезки: сетка (подобранная, если `grid_auto`) и файлы клеток

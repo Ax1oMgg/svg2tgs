@@ -4,15 +4,20 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Найденный SVG-файл.
+/// Найденный файл: SVG или картинка.
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Entry {
     pub path: String,
     pub name: String,
 }
 
+/// SVG или картинка, которую можно трассировать.
 fn is_svg(p: &Path) -> bool {
-    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+    p.extension().is_some_and(|e| {
+        ["svg", "png", "jpg", "jpeg", "webp"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 fn collect(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
@@ -32,7 +37,7 @@ fn collect(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Папки разворачиваются в SVG внутри; файлы не-SVG отбрасываются;
+/// Папки разворачиваются в SVG и картинки внутри; остальные файлы отбрасываются;
 /// повторы убираются.
 pub fn expand(paths: &[String], recursive: bool) -> Vec<Entry> {
     let mut found = Vec::new();

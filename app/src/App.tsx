@@ -19,6 +19,7 @@ import {
   DEFAULT_OPTIONS,
   GRID_KEYS,
   OWN_KEYS,
+  isRaster,
   SECTION_KEYS,
   sameKeys,
   type Existing,
@@ -516,6 +517,8 @@ export function App() {
       selectedName={selected?.name ?? null}
       selectedCount={Math.max(chosen.length, selected ? 1 : 0)}
       actualGrid={selected?.outcome && !selected.outcome.error ? selected.outcome.grid : null}
+      showTrace={scope === "one" ? picked.some((it) => isRaster(it.name)) : items.some((it) => isRaster(it.name))}
+      traceInfo={selected?.outcome?.trace ?? null}
       exportPrefs={prefs.export}
       onExportPrefs={(e) => {
         if (!e.dir && prefs.export.dir) backend.clearFolder();
