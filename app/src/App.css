@@ -2598,7 +2598,61 @@ input.pub__emoji-input {
 }
 
 .set__cell--dragged {
-  opacity: 0.4;
+  opacity: 0.35;
+}
+
+.set__cell-wrap {
+  position: relative;
+}
+
+/* Свои события указателя: касание не должно прокручивать сетку вместо перетаскивания. */
+.set__cell {
+  touch-action: none;
+  user-select: none;
+}
+
+.set__grid--dragging,
+.set__grid--dragging .set__cell {
+  cursor: grabbing;
+}
+
+/* Место вставки — полоса между стикерами. */
+.set__drop {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  z-index: 1;
+}
+
+.set__drop--before {
+  left: calc(var(--space-2) / -2 - 1.5px);
+}
+
+.set__drop--after {
+  right: calc(var(--space-2) / -2 - 1.5px);
+}
+
+/* Стикер под указателем. */
+.set__ghost {
+  position: fixed;
+  z-index: 10;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-dialog);
+  pointer-events: none;
+}
+
+.set__ghost img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .set__cell--gone img {
