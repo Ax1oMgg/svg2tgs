@@ -271,7 +271,6 @@
   "tgDisconnectHint": "Забыть токен и аккаунт",
   "tgPublish": "В Telegram",
   "tgPublishGrid": "Выгрузить в Telegram — эмодзи из сетки {name}",
-  "tgPublishList": "Выгрузить в Telegram — набор из файлов списка",
   "tgPublishNoBot": "Выгрузка в Telegram: подключите бота в «Настройках»",
   "pubTitle": "Выгрузить в Telegram",
   "pubRunning": "Выгрузка в Telegram",
@@ -402,5 +401,8 @@
   "tgErr_set_changed": "Набор изменился с тех пор, как его открыли (стикеры добавлены или удалены не здесь). Откройте его заново.",
   "tgErr_thumb_too_big": "Обложка больше 32 КБ — Telegram такую не примет. Выберите стикер поменьше.",
   "tgErr_cover_invalid": "Эта обложка не подходит: у набора эмодзи обложка — один из его эмодзи.",
-  "tgErr_delete_all": "Нельзя удалить все стикеры: пустой набор Telegram не хранит."
+  "tgErr_delete_all": "Нельзя удалить все стикеры: пустой набор Telegram не хранит.",
+  "exportSelected": "Экспортировать выбранные ({n})",
+  "tgPublishOne": "Выгрузить в Telegram — {name}",
+  "tgPublishSelected": "Выгрузить в Telegram — выбранные файлы ({n})"
 }

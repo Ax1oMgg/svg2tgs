@@ -204,7 +204,9 @@ export function ExportPanel(p: Props) {
     ["free", t.fitFree, t.fitFreeHint],
   ];
   const many = p.selectedCount > 1;
-  const oneTitle = p.selectedName
+  const oneTitle = many
+    ? t.exportSelected(p.selectedCount)
+    : p.selectedName
     ? options.grid
       ? t.exportOneTiles(p.selectedName, tiles)
       : t.exportOne(p.selectedName)
@@ -213,7 +215,7 @@ export function ExportPanel(p: Props) {
   return (
     <aside className="export" aria-label={t.exportPanel}>
       {/* Шапка как у «Файлов»: не прокручивается. «Экспортировать» — весь
-          список; значок рядом — только выбранный файл. */}
+          список; значок рядом — выбранный файл или выбранный диапазон. */}
       <div className="export__head">
         <h2 className="panel-title">{t.exportPanel}</h2>
         <div className="export__actions">
