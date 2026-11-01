@@ -32,13 +32,56 @@ function webCsp(): Plugin {
   };
 }
 
+/** Адрес сайта: превью ссылки требует полных адресов. */
+const SITE = "https://ax1omgg.github.io/svg2tgs/";
+
+/**
+ * Веб-версия: иконка вкладки и превью ссылки (Open Graph — Telegram, VK,
+ * Discord). Иконки — те же исходники, что у программы: Vite кладёт их
+ * в сборку сам. Картинка превью — `web-public/og.png` (макет, страница
+ * «Промо и прочее»): ей нужен постоянный адрес, поэтому она без хеша.
+ */
+function webHead(): Plugin {
+  const title = "svg2tgs — веб-версия";
+  const description =
+    "SVG → стикеры и эмодзи Telegram прямо в браузере. Без лимитов, ничего не нужно устанавливать, файлы не покидают ваш компьютер.";
+  const tags = [
+    `<meta name="description" content="${description}" />`,
+    `<link rel="icon" type="image/svg+xml" href="./app-icon-small.svg" />`,
+    `<link rel="icon" type="image/png" sizes="32x32" href="./src-tauri/icons/32x32.png" />`,
+    `<link rel="apple-touch-icon" href="./src-tauri/icons/128x128@2x.png" />`,
+    `<meta property="og:type" content="website" />`,
+    `<meta property="og:url" content="${SITE}" />`,
+    `<meta property="og:site_name" content="svg2tgs" />`,
+    `<meta property="og:title" content="${title}" />`,
+    `<meta property="og:description" content="${description}" />`,
+    `<meta property="og:locale" content="ru_RU" />`,
+    `<meta property="og:image" content="${SITE}og.png" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:image:alt" content="svg2tgs — веб-версия: SVG в стикеры и эмодзи Telegram в браузере" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+  ];
+  return {
+    name: "svg2tgs-web-head",
+    apply: "build",
+    // До обработки HTML самим Vite: иначе он не увидит иконки как файлы сборки.
+    transformIndexHtml: {
+      order: "pre",
+      handler: (html) => html.replace("  </head>", `    ${tags.join("\n    ")}\n  </head>`),
+    },
+  };
+}
+
 // Обычная сборка рассчитана на Tauri: фиксированный порт для `tauri dev`
 // и сборка под системные WebView (WebView2, WebKit). `--mode web` —
 // веб-версия для GitHub Pages (docs/BUILD.md, «Веб-версия»).
 export default defineConfig(({ mode }) => {
   const web = mode === "web";
   return {
-    plugins: web ? [react(), webCsp()] : [react()],
+    plugins: web ? [react(), webCsp(), webHead()] : [react()],
+    // Файлы веб-версии с постоянными адресами (картинка превью ссылки).
+    publicDir: web ? "web-public" : "public",
     // Сайт лежит в подпапке: ax1omgg.github.io/svg2tgs/.
     base: web ? "/svg2tgs/" : "/",
     resolve: {
