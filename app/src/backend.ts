@@ -20,6 +20,7 @@ import {
   type SaveRequest,
   type Saved,
   type SetKind,
+  type SetView,
   type Source,
   type TgError,
   type TgStatus,
@@ -232,6 +233,17 @@ export async function tgStem(title: string): Promise<string> {
   return /^[a-z]/.test(s) ? s : s ? `s_${s}` : "stickers";
 }
 
+/** Набор этого бота по началу адреса (сеть) — для «Дописать». */
+export async function tgSetInfo(stem: string): Promise<SetView> {
+  if (isTauri()) return tgCall<SetView>("tg_set_info", { stem });
+  await delay(400);
+  const name = `${stem}_by_${tgMock.status.bot ?? "bot"}`;
+  const count = tgMock.sets.get(name);
+  if (count == null) throw { code: "set_missing", name } as TgError;
+  const known = tgMock.status.sets.find((s) => s.name === name);
+  return { name, title: known?.title ?? stem, count, kind: known?.kind ?? "stickers" };
+}
+
 /** Выгрузить набор; ход — через `onProgress`. */
 export async function tgPublish(request: PublishRequest, onProgress: (p: PublishProgress) => void): Promise<PublishDone> {
   const name = `${request.stem}_by_${tgMock.status.bot ?? "bot"}`;
@@ -241,17 +253,24 @@ export async function tgPublish(request: PublishRequest, onProgress: (p: Publish
     return tgCall<PublishDone>("tg_publish", { request, onProgress: channel });
   }
   const total = request.items.length;
-  const start = request.resume ? (tgMock.sets.get(name) ?? 0) : 0;
-  if (!request.resume && tgMock.sets.has(name)) throw { code: "name_taken", name } as TgError;
+  const base = request.appendBase;
+  if (base != null && !tgMock.sets.has(name)) throw { code: "set_missing", name } as TgError;
+  // Сколько файлов задания уже в наборе (продолжение или дописывание).
+  const start = base != null ? (tgMock.sets.get(name) ?? 0) - base : request.resume ? (tgMock.sets.get(name) ?? 0) : 0;
+  if (base == null && !request.resume && tgMock.sets.has(name)) throw { code: "name_taken", name } as TgError;
   tgMock.stop = false;
   for (let done = start + 1; done <= total; done++) {
     await delay(120);
     if (tgMock.stop) throw { code: "stopped", done: done - 1 } as TgError;
     // Демонстрация обрыва: на 24-м при первой попытке.
-    if (done === 24 && !request.resume) throw { code: "network", done: 23, detail: "io" } as TgError;
-    tgMock.sets.set(name, done);
+    if (done === 24 && !request.resume && base == null) throw { code: "network", done: 23, detail: "io" } as TgError;
+    tgMock.sets.set(name, (base ?? 0) + done);
     onProgress({ done, total });
   }
+  tgMock.status = {
+    ...tgMock.status,
+    sets: [{ name, title: request.title, kind: request.kind }, ...tgMock.status.sets.filter((s) => s.name !== name)],
+  };
   const link = `https://t.me/${request.kind === "emoji" ? "addemoji" : "addstickers"}/${name}`;
   return { name, link, count: total, resumed_from: start };
 }
@@ -275,7 +294,7 @@ export async function tgOpen(set?: { kind: SetKind; name: string }): Promise<voi
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const tgMock = {
-  status: { enabled: false, bot: null, owner: null } as TgStatus,
+  status: { enabled: false, bot: null, owner: null, sets: [] } as TgStatus,
   polls: 0,
   stop: false,
   sets: new Map<string, number>(),

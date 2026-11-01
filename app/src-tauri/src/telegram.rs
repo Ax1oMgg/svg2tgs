@@ -24,7 +24,21 @@ pub struct Config {
     pub bot: Option<String>,
     /// Владелец наборов, если он написал боту /start.
     pub owner: Option<Owner>,
+    /// Наборы, созданные или дополненные программой, — подсказки для
+    /// «Дописать» (Bot API не умеет отдавать список наборов бота).
+    pub sets: Vec<KnownSet>,
 }
+
+/// Набор, в который программа уже выгружала.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownSet {
+    pub name: String,
+    pub title: String,
+    pub kind: SetKind,
+}
+
+/// Сколько наборов помнить.
+const KNOWN_SETS: usize = 30;
 
 /// Хранилище токена.
 pub trait TokenStore: Send + Sync {
@@ -100,6 +114,17 @@ pub struct Status {
     pub bot: Option<String>,
     /// Как назвать владельца: `@ник` или имя.
     pub owner: Option<String>,
+    /// Наборы этого бота, в которые программа уже выгружала (новые — первыми).
+    pub sets: Vec<KnownSet>,
+}
+
+/// Набор в Telegram — для «Дописать».
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SetView {
+    pub name: String,
+    pub title: String,
+    pub count: usize,
+    pub kind: Option<SetKind>,
 }
 
 pub struct Telegram {
@@ -225,6 +250,36 @@ impl Telegram {
         })
     }
 
+    /// Запомнить набор после выгрузки (новые — первыми, без повторов).
+    pub fn remember(&self, set: KnownSet) -> Status {
+        self.update(|c| {
+            c.sets.retain(|s| !s.name.eq_ignore_ascii_case(&set.name));
+            c.sets.insert(0, set);
+            c.sets.truncate(KNOWN_SETS);
+        })
+    }
+
+    /// Набор по началу адреса (`getStickerSet`) — для «Дописать».
+    pub fn set_info<T: Transport>(
+        &self,
+        stem: &str,
+        make: impl FnOnce(&str) -> T,
+    ) -> Result<SetView, TgError> {
+        let bot_name = self.config().bot.ok_or(TgError::NoToken)?;
+        let name = rules::set_name(stem.trim(), &bot_name);
+        let set = self
+            .bot_with(Access::Saved, None, make)?
+            .get_set(&name)
+            .map_err(|f| PublishError::from_failure(f, 0))?
+            .ok_or(PublishError::SetMissing { name: name.clone() })?;
+        Ok(SetView {
+            name,
+            title: set.title,
+            count: set.count,
+            kind: set.kind,
+        })
+    }
+
     /// Начало адреса из названия.
     pub fn stem(&self, title: &str) -> String {
         let bot = self.config.lock().unwrap().bot.clone().unwrap_or_default();
@@ -233,10 +288,25 @@ impl Telegram {
 }
 
 fn status(c: &Config) -> Status {
+    let suffix = c
+        .bot
+        .as_deref()
+        .map(|b| rules::suffix(b).to_ascii_lowercase());
     Status {
         enabled: c.enabled,
         bot: c.bot.clone(),
         owner: c.owner.as_ref().map(owner_label),
+        // Только наборы текущего бота: у другого бота они чужие.
+        sets: c
+            .sets
+            .iter()
+            .filter(|s| {
+                suffix
+                    .as_ref()
+                    .is_some_and(|x| s.name.to_ascii_lowercase().ends_with(x))
+            })
+            .cloned()
+            .collect(),
     }
 }
 
@@ -262,6 +332,9 @@ pub struct PublishRequest {
     pub stem: String,
     #[serde(default)]
     pub resume: bool,
+    /// Дописать в существующий набор: сколько в нём было до первой попытки.
+    #[serde(default)]
+    pub append_base: Option<usize>,
     pub items: Vec<PublishItem>,
 }
 
@@ -290,6 +363,7 @@ pub fn build_job(
         title: req.title.trim().to_string(),
         items,
         resume: req.resume,
+        append: req.append_base,
     })
 }
 
@@ -418,7 +492,8 @@ mod tests {
             Ok(Status {
                 enabled: true,
                 bot: Some("tea_stickers_bot".into()),
-                owner: None
+                owner: None,
+                sets: vec![]
             })
         );
         assert_eq!(t.store.get().as_deref(), Some("123:abc"));
@@ -453,12 +528,33 @@ mod tests {
     }
 
     #[test]
+    fn known_sets_are_per_bot_newest_first() {
+        let t = tg();
+        t.set_enabled(true);
+        let c = Arc::new(AtomicUsize::new(0));
+        t.check_token(Access::Saved, "1:a", |_| Counting(c))
+            .unwrap();
+        let set = |n: &str| KnownSet {
+            name: n.into(),
+            title: n.into(),
+            kind: SetKind::Emoji,
+        };
+        t.remember(set("a_by_tea_stickers_bot"));
+        t.remember(set("b_by_other_bot"));
+        let s = t.remember(set("A_by_tea_stickers_bot"));
+        let names: Vec<_> = s.sets.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, ["A_by_tea_stickers_bot"]);
+        assert_eq!(t.config().sets.len(), 2);
+    }
+
+    #[test]
     fn job_is_built_from_tiles() {
         let req = PublishRequest {
             kind: SetKind::Emoji,
             title: " Сердечки ".into(),
             stem: "serdechki".into(),
             resume: false,
+            append_base: None,
             items: vec![
                 PublishItem {
                     id: "a".into(),

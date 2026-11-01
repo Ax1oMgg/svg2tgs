@@ -47,6 +47,8 @@ pub struct Owner {
 pub struct SetInfo {
     pub title: String,
     pub count: usize,
+    /// Тип набора (`sticker_type`); `None` — Telegram не сообщил.
+    pub kind: Option<SetKind>,
 }
 
 /// Стикер для `createNewStickerSet` и `addStickerToSet`.
@@ -222,6 +224,11 @@ impl<T: Transport> Bot<T> {
                     .get("stickers")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
+                kind: match v.get("sticker_type").and_then(Value::as_str) {
+                    Some("regular") => Some(SetKind::Stickers),
+                    Some("custom_emoji") => Some(SetKind::Emoji),
+                    _ => None,
+                },
             })),
             Err(Failure::Api { description, .. }) if description.contains("STICKERSET_INVALID") => {
                 Ok(None)

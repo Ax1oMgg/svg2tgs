@@ -91,7 +91,7 @@ export function App() {
   const [browserMode, setBrowserMode] = useState(false);
   const [version, setVersion] = useState("");
   // Выгрузка в Telegram: состояние читается без сети.
-  const [tg, setTg] = useState<TgStatus>({ enabled: false, bot: null, owner: null });
+  const [tg, setTg] = useState<TgStatus>({ enabled: false, bot: null, owner: null, sets: [] });
   const [publishing, setPublishing] = useState<{ source: PublishSource; kind: SetKind } | null>(null);
   const pasted = useRef(0);
   const t = strings[prefs.lang];
@@ -594,7 +594,11 @@ export function App() {
           source={publishing.source}
           defaultKind={publishing.kind}
           onToast={(text) => setToast({ text, dismissOnAction: true })}
-          onClose={() => setPublishing(null)}
+          onClose={() => {
+            setPublishing(null);
+            // Выгрузка могла добавить набор в подсказки «Дописать».
+            void backend.tgStatus().then(setTg);
+          }}
         />
       )}
 

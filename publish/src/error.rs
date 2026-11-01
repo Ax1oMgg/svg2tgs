@@ -78,6 +78,12 @@ pub enum PublishError {
     /// Не удалось прочитать файл с диска.
     #[error("read_failed")]
     ReadFailed { index: usize, detail: String },
+    /// Дописать некуда: набора с таким адресом нет.
+    #[error("set_missing")]
+    SetMissing { name: String },
+    /// Дописываем стикеры в набор эмодзи или наоборот.
+    #[error("kind_mismatch")]
+    KindMismatch { name: String },
     /// Ответ не похож на ответ Bot API (например, страница прокси вместо
     /// Telegram): HTTP-код и начало ответа.
     #[error("unexpected")]
@@ -92,7 +98,7 @@ impl PublishError {
     }
 
     /// Общее толкование отказа; `done` — сколько уже выгружено.
-    pub(crate) fn from_failure(f: Failure, done: usize) -> Self {
+    pub fn from_failure(f: Failure, done: usize) -> Self {
         match f {
             Failure::Network(detail) => Self::Network { done, detail },
             Failure::Unexpected(detail) => Self::Unexpected { detail },

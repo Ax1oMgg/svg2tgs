@@ -420,7 +420,7 @@ fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
 
 /* ------------------------------ Выгрузка в Telegram ----------------------------- */
 
-use telegram::{Access, PublishRequest, Status, Telegram, TgError};
+use telegram::{Access, KnownSet, PublishRequest, SetView, Status, Telegram, TgError};
 
 /// Ошибка фонового потока — как «прочий отказ».
 fn join_error(e: impl ToString) -> TgError {
@@ -490,6 +490,16 @@ fn tg_stem(title: String, tg: State<'_, Telegram>) -> String {
     tg.stem(&title)
 }
 
+/// Набор этого бота по началу адреса — для «Дописать».
+#[tauri::command]
+async fn tg_set_info(stem: String, app: tauri::AppHandle) -> Result<SetView, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Telegram>().set_info(&stem, telegram::http)
+    })
+    .await
+    .map_err(join_error)?
+}
+
 /// Выгрузить готовые TGS; ход — через `on_progress`.
 #[tauri::command]
 async fn tg_publish(
@@ -511,7 +521,7 @@ async fn tg_publish(
         })?;
         let bot = tg.bot_with(Access::Saved, None, telegram::http)?;
         telegram::reset_stop(&tg.stop);
-        svg2tgs_publish::run(
+        let done = svg2tgs_publish::run(
             &bot,
             &bot_name,
             owner.id,
@@ -520,8 +530,13 @@ async fn tg_publish(
                 let _ = on_progress.send(p);
             },
             &tg.stop,
-        )
-        .map_err(TgError::from)
+        )?;
+        tg.remember(KnownSet {
+            name: done.name.clone(),
+            title: job.title.clone(),
+            kind: job.kind,
+        });
+        Ok(done)
     })
     .await
     .map_err(join_error)?
@@ -592,6 +607,7 @@ pub fn run() {
             tg_find_owner,
             tg_disconnect,
             tg_stem,
+            tg_set_info,
             tg_publish,
             tg_stop,
             tg_open,

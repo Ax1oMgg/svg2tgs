@@ -283,7 +283,7 @@
   "pubSet": "Set",
   "pubSetNew": "New",
   "pubSetAppend": "Add to",
-  "pubSetAppendHint": "Add to a set created by this bot — coming later",
+  "pubSetAppendHint": "Add to a set created by this bot",
   "pubName": "Title",
   "pubAddress": "Set address",
   "pubEmojiStickers": "Emoji for search — each sticker has its own",
@@ -325,5 +325,14 @@
   "tgErr_stopped": "Stopped: {done} uploaded.",
   "tgErr_telegram": "Telegram returned error {status}: {detail}",
   "tgErr_read_failed": "Could not read file #{index}: {detail}",
-  "tgErr_unexpected": "Telegram sent an unexpected response ({detail}). The connection may go through a proxy or a provider filter."
+  "tgErr_unexpected": "Telegram sent an unexpected response ({detail}). The connection may go through a proxy or a provider filter.",
+  "pubFind": "Find",
+  "pubFinding": "Searching…",
+  "pubFound": "“{title}”: {count}, room for {free} more",
+  "pubFoundNoRoom": "“{title}”: {count}, room for {free} — fewer than the files ({n})",
+  "pubKnownHint": "The field suggests sets this app has already uploaded to.",
+  "pubGoAppend": "Add ({n})",
+  "pubDoneAppend": "Done: {n} added to the set “{title}”.",
+  "tgErr_set_missing": "No set with this address. You can only add to sets created by this bot.",
+  "tgErr_kind_mismatch": "This set is of another type: stickers cannot be added to an emoji set and vice versa."
 }

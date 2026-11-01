@@ -116,6 +116,12 @@ pub fn publish_error(e: &svg2tgs_publish::PublishError) -> String {
         E::Network { done, .. } => format!("нет связи с Telegram (выгружено {done})"),
         E::Stopped { done } => format!("остановлено (выгружено {done})"),
         E::Telegram { status, detail } => format!("Telegram ответил ошибкой {status}: {detail}"),
+        E::SetMissing { name } => format!(
+            "набора «{name}» нет — проверьте адрес (--name); дописывать можно только в наборы этого бота"
+        ),
+        E::KindMismatch { name } => format!(
+            "«{name}» — набор другого типа: стикеры нельзя дописать в набор эмодзи и наоборот"
+        ),
         E::Unexpected { detail } => format!(
             "Telegram прислал непонятный ответ ({detail}); возможно, соединение идёт через прокси или фильтр"
         ),

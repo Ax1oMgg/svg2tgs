@@ -170,7 +170,9 @@ impl Transport for Fake {
                 Ok(json!(true))
             }
             "getStickerSet" => match s.sets.get(&text(&form, "name")) {
-                Some((_, st)) => Ok(json!({"title": "t", "stickers": vec![json!({}); st.len()]})),
+                Some((ty, st)) => Ok(
+                    json!({"title": "t", "sticker_type": ty, "stickers": vec![json!({}); st.len()]}),
+                ),
                 None => Err(bad("STICKERSET_INVALID")),
             },
             other => panic!("неожиданный метод {other}"),
@@ -193,6 +195,7 @@ fn job(n: usize, kind: SetKind) -> Job {
             })
             .collect(),
         resume: false,
+        append: None,
     }
 }
 
@@ -285,6 +288,85 @@ fn network_break_then_resume_continues_without_duplicates() {
     let set = fake.set(&done.name).unwrap();
     assert_eq!(set.len(), 40);
     assert_eq!(set[11].1, vec!["😍"]);
+}
+
+#[test]
+fn append_adds_to_existing_set_and_resumes_without_duplicates() {
+    let fake = Fake::new();
+    let b = bot(&fake);
+    let name = format!("serdechki_by_{BOT}");
+    run(
+        &b,
+        BOT,
+        OWNER,
+        &job(5, SetKind::Emoji),
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    // Дописать 10: обрыв на загрузке 4-го (getStickerSet, по 2 вызова на стикер).
+    let mut more = job(10, SetKind::Emoji);
+    more.append = Some(5);
+    let calls_before = fake.0.lock().unwrap().calls.len();
+    fake.0.lock().unwrap().fail_at =
+        Some((calls_before + 1 + 2 * 3 + 1, Failure::Network("io".into())));
+    let err = run(&b, BOT, OWNER, &more, |_| {}, &AtomicBool::new(false)).unwrap_err();
+    assert_eq!(
+        err,
+        PublishError::Network {
+            done: 3,
+            detail: "io".into()
+        }
+    );
+    assert_eq!(fake.set(&name).unwrap().len(), 8);
+
+    // «Продолжить» с той же базой: дописываются только 7 оставшихся.
+    let done = run(&b, BOT, OWNER, &more, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(done.resumed_from, 3);
+    assert_eq!(fake.set(&name).unwrap().len(), 15);
+    assert_eq!(fake.calls("createNewStickerSet"), 1);
+}
+
+#[test]
+fn append_checks_the_target() {
+    let fake = Fake::new();
+    let b = bot(&fake);
+    let mut j = job(3, SetKind::Emoji);
+    j.append = Some(0);
+    assert!(matches!(
+        run(&b, BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)),
+        Err(PublishError::SetMissing { .. })
+    ));
+    run(
+        &b,
+        BOT,
+        OWNER,
+        &job(3, SetKind::Stickers),
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(matches!(
+        run(&b, BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)),
+        Err(PublishError::KindMismatch { .. })
+    ));
+    let mut full = job(118, SetKind::Stickers);
+    full.append = Some(3);
+    assert_eq!(
+        run(&b, BOT, OWNER, &full, |_| {}, &AtomicBool::new(false)),
+        Err(PublishError::TooMany {
+            count: 121,
+            max: 120
+        })
+    );
+    // База больше, чем в наборе, — это другой набор.
+    let mut odd = job(2, SetKind::Stickers);
+    odd.append = Some(10);
+    assert!(matches!(
+        run(&b, BOT, OWNER, &odd, |_| {}, &AtomicBool::new(false)),
+        Err(PublishError::SetMismatch { .. })
+    ));
 }
 
 #[test]

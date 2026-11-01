@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { strings, tgErrorText } from "../i18n";
-import type { FileItem, PublishDone, PublishProgress, SetKind, TgError, TgStatus } from "../types";
+import type { FileItem, PublishDone, PublishProgress, SetKind, SetView, TgError, TgStatus } from "../types";
 import { SegButton } from "./Preview";
 
 /** Что выгружаем: клетки нарезки одного файла или файлы списка. */
@@ -31,6 +31,10 @@ interface Entry {
 }
 
 type Phase = "form" | "running" | "broken" | "done";
+type Mode = "new" | "append";
+
+/** Сколько помещается в набор (`rules::SetKind::capacity`). */
+const CAPACITY: Record<SetKind, number> = { stickers: 120, emoji: 200 };
 
 const base = (name: string) => name.replace(/\.svg$/i, "");
 const pad = (i: number) => String(i + 1).padStart(2, "0");
@@ -72,20 +76,62 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
   const [progress, setProgress] = useState<PublishProgress>({ done: 0, total: entries.length });
   const [error, setError] = useState<TgError | null>(null);
   const [done, setDone] = useState<PublishDone | null>(null);
+  // «Дописать»: найденный набор и сколько в нём было до первой попытки.
+  const [mode, setMode] = useState<Mode>("new");
+  const [found, setFound] = useState<SetView | null>(null);
+  const [finding, setFinding] = useState(false);
+  const [fixedBase, setFixedBase] = useState<number | null>(null);
+  const suffix = `_by_${status.bot}`;
+  const stemOf = (name: string) => (name.toLowerCase().endsWith(suffix.toLowerCase()) ? name.slice(0, -suffix.length) : name);
 
   useEffect(() => {
     if (!ref.current?.open) ref.current?.showModal();
   }, []);
 
-  // Адрес из названия, пока его не правили руками.
+  // Адрес из названия, пока его не правили руками (только для нового набора).
   useEffect(() => {
-    if (stemTouched) return;
+    if (stemTouched || mode === "append") return;
     let alive = true;
     void backend.tgStem(title).then((s) => alive && setStem(s));
     return () => {
       alive = false;
     };
-  }, [title, stemTouched]);
+  }, [title, stemTouched, mode]);
+
+  /** Найти набор для «Дописать» (запрос к Telegram — по действию). */
+  const find = async (s: string) => {
+    if (!s.trim()) return;
+    setFinding(true);
+    setFound(null);
+    setError(null);
+    try {
+      const set = await backend.tgSetInfo(s.trim());
+      setFound(set);
+      if (set.kind) setKind(set.kind);
+    } catch (e) {
+      setError(e as TgError);
+    } finally {
+      setFinding(false);
+    }
+  };
+
+  const pickMode = (m: Mode) => {
+    if (m === mode) return;
+    setMode(m);
+    setError(null);
+    setFound(null);
+    setFixedBase(null);
+    if (m === "append") {
+      // Последний набор, в который выгружали, — сразу ищем его.
+      const last = status.sets[0];
+      if (last) {
+        setStem(stemOf(last.name));
+        void find(stemOf(last.name));
+      } else setStem("");
+    } else setStemTouched(false);
+  };
+
+  const free = found ? CAPACITY[found.kind ?? kind] - found.count : 0;
 
   const emojiOf = (e: Entry) => parseEmoji(own[e.key] ?? emojiAll);
 
@@ -99,14 +145,19 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
       return;
     }
     setError(null);
+    // Дописывание: база — сколько было в наборе до первой попытки (при
+    // «Продолжить» — та же, чтобы не повторять уже дописанное).
+    const appendBase = mode === "append" ? (fixedBase ?? found?.count ?? 0) : null;
+    if (appendBase != null) setFixedBase(appendBase);
     setPhase("running");
     try {
       const result = await backend.tgPublish(
         {
           kind,
-          title: title.trim(),
+          title: mode === "append" ? (found?.title ?? title).trim() : title.trim(),
           stem: stem.trim(),
           resume,
+          appendBase,
           items: entries.map((e) => ({ id: e.id, tile: e.tile, name: e.name, emoji: emojiOf(e) })),
         },
         setProgress,
@@ -160,49 +211,89 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
             <div className="pub__pair">
               <div className="field">
                 <div className="field__label">{t.pubKind}</div>
+                {/* При дописывании тип — у найденного набора. */}
                 <div className="segmented segmented--wide" role="radiogroup" aria-label={t.pubKind}>
-                  <SegButton active={kind === "stickers"} onClick={() => setKind("stickers")}>
-                    {t.pubKindStickers}
-                  </SegButton>
-                  <SegButton active={kind === "emoji"} onClick={() => setKind("emoji")}>
-                    {t.pubKindEmoji}
-                  </SegButton>
+                  {(["stickers", "emoji"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      role="radio"
+                      aria-checked={kind === k}
+                      className="segmented__item"
+                      disabled={mode === "append"}
+                      onClick={() => setKind(k)}
+                    >
+                      {k === "stickers" ? t.pubKindStickers : t.pubKindEmoji}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="field">
                 <div className="field__label">{t.pubSet}</div>
                 <div className="segmented segmented--wide" role="radiogroup" aria-label={t.pubSet}>
-                  <SegButton active onClick={() => {}}>
+                  <SegButton active={mode === "new"} onClick={() => pickMode("new")}>
                     {t.pubSetNew}
                   </SegButton>
-                  <button type="button" role="radio" aria-checked="false" className="segmented__item" disabled title={t.pubSetAppendHint}>
+                  <SegButton active={mode === "append"} title={t.pubSetAppendHint} onClick={() => pickMode("append")}>
                     {t.pubSetAppend}
-                  </button>
+                  </SegButton>
                 </div>
               </div>
             </div>
 
-            <label className="field">
-              <span className="field__label">{t.pubName}</span>
-              <input type="text" value={title} maxLength={64} onChange={(e) => setTitle(e.target.value)} />
-            </label>
+            {mode === "new" && (
+              <label className="field">
+                <span className="field__label">{t.pubName}</span>
+                <input type="text" value={title} maxLength={64} onChange={(e) => setTitle(e.target.value)} />
+              </label>
+            )}
 
-            <label className="field">
-              <span className="field__label">{t.pubAddress}</span>
-              <span className="pub__address">
-                <span className="pub__affix">t.me/{kind === "emoji" ? "addemoji" : "addstickers"}/</span>
-                <input
-                  type="text"
-                  value={stem}
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setStemTouched(true);
-                    setStem(e.target.value.replace(/[^A-Za-z0-9_]/g, ""));
-                  }}
-                />
-                <span className="pub__affix">_by_{status.bot}</span>
-              </span>
-            </label>
+            <div className="field">
+              <label className="field__label" htmlFor="pub-stem">
+                {t.pubAddress}
+              </label>
+              <div className="row">
+                <span className="pub__address">
+                  <span className="pub__affix">t.me/{kind === "emoji" ? "addemoji" : "addstickers"}/</span>
+                  <input
+                    id="pub-stem"
+                    type="text"
+                    value={stem}
+                    spellCheck={false}
+                    list={mode === "append" ? "pub-known" : undefined}
+                    onChange={(e) => {
+                      setStemTouched(true);
+                      setStem(e.target.value.replace(/[^A-Za-z0-9_]/g, ""));
+                      if (mode === "append") setFound(null);
+                    }}
+                    onKeyDown={(e) => mode === "append" && e.key === "Enter" && void find(stem)}
+                  />
+                  <span className="pub__affix">{suffix}</span>
+                </span>
+                {mode === "append" && (
+                  <button type="button" className="btn btn--default" disabled={!stem.trim() || finding} onClick={() => void find(stem)}>
+                    {finding ? t.pubFinding : t.pubFind}
+                  </button>
+                )}
+              </div>
+              {mode === "append" && (
+                <datalist id="pub-known">
+                  {status.sets.map((s) => (
+                    <option key={s.name} value={stemOf(s.name)}>
+                      {s.title}
+                    </option>
+                  ))}
+                </datalist>
+              )}
+              {mode === "append" && found && (
+                <p className={`note ${free >= entries.length ? "note--info" : "note--warn"}`}>
+                  {free >= entries.length
+                    ? t.pubFound(found.title, found.count, free)
+                    : t.pubFoundNoRoom(found.title, found.count, free, entries.length)}
+                </p>
+              )}
+              {mode === "append" && !found && status.sets.length > 0 && <span className="hint">{t.pubKnownHint}</span>}
+            </div>
 
             <div className="field">
               <div className="pub__emoji-head">
@@ -287,9 +378,20 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
               <button type="button" className="btn btn--text" onClick={onClose}>
                 {t.cancel}
               </button>
-              <button type="button" className="btn btn--primary" disabled={!title.trim() || !stem.trim() || entries.length === 0} onClick={() => void run(false)}>
-                {t.pubGo(entries.length)}
-              </button>
+              {mode === "new" ? (
+                <button type="button" className="btn btn--primary" disabled={!title.trim() || !stem.trim() || entries.length === 0} onClick={() => void run(false)}>
+                  {t.pubGo(entries.length)}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={!found || free < entries.length || entries.length === 0}
+                  onClick={() => void run(false)}
+                >
+                  {t.pubGoAppend(entries.length)}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -297,7 +399,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
         {(phase === "running" || phase === "broken") && (
           <div className="pub">
             <div className="pub__progress-head">
-              <span className="tg__strong">«{title.trim()}»</span>
+              <span className="tg__strong">«{(mode === "append" ? (found?.title ?? title) : title).trim()}»</span>
               <span className="hint">{t.pubProgress(progress.done, progress.total)}</span>
             </div>
             <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done} aria-label={t.pubRunning}>
@@ -344,7 +446,9 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                 </svg>
               </span>
               <span>
-                {t.pubDoneText(done.count, title.trim())}
+                {mode === "append"
+                  ? t.pubDoneAppend(done.count, (found?.title ?? title).trim())
+                  : t.pubDoneText(done.count, title.trim())}
                 <br />
                 <span className="hint">{t.pubDoneSub}</span>
               </span>

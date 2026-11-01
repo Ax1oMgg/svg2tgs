@@ -231,6 +231,23 @@ export interface TgStatus {
   bot: string | null;
   /** Владелец наборов: `@ник` или имя; `null` — боту ещё не написали /start. */
   owner: string | null;
+  /** Наборы этого бота, в которые программа уже выгружала (новые — первыми). */
+  sets: KnownSet[];
+}
+
+/** Набор, в который программа уже выгружала. */
+export interface KnownSet {
+  name: string;
+  title: string;
+  kind: SetKind;
+}
+
+/** Набор в Telegram — для «Дописать». */
+export interface SetView {
+  name: string;
+  title: string;
+  count: number;
+  kind: SetKind | null;
 }
 
 /** Ошибка выгрузки: код и параметры (`TgError`, `PublishError`). */
@@ -256,6 +273,8 @@ export interface PublishRequest {
   /** Начало адреса, без `_by_<бот>`. */
   stem: string;
   resume: boolean;
+  /** Дописать в существующий набор: сколько в нём было до первой попытки. */
+  appendBase: number | null;
   items: PublishItem[];
 }
 
