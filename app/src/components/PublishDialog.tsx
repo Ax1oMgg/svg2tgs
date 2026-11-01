@@ -75,6 +75,8 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
   const [phase, setPhase] = useState<Phase>("form");
   const [progress, setProgress] = useState<PublishProgress>({ done: 0, total: entries.length });
   const [error, setError] = useState<TgError | null>(null);
+  // «Остановить» нажато: ждём ответа на текущий запрос.
+  const [stopping, setStopping] = useState(false);
   const [done, setDone] = useState<PublishDone | null>(null);
   // «Дописать»: найденный набор и сколько в нём было до первой попытки.
   const [mode, setMode] = useState<Mode>("new");
@@ -149,6 +151,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
     // «Продолжить» — та же, чтобы не повторять уже дописанное).
     const appendBase = mode === "append" ? (fixedBase ?? found?.count ?? 0) : null;
     if (appendBase != null) setFixedBase(appendBase);
+    setStopping(false);
     setPhase("running");
     try {
       const result = await backend.tgPublish(
@@ -411,6 +414,11 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                 {entries[Math.min(progress.done, entries.length - 1)]?.name}.tgs
               </span>
             )}
+            {running && progress.wait != null && !stopping && (
+              <p className="note note--info" role="status">
+                {t.pubWait(progress.wait)}
+              </p>
+            )}
             {phase === "broken" && error && (
               <p className="note note--warn">
                 {tgErrorText(error, lang)} {error.code !== "set_full" && t.pubKept}
@@ -418,8 +426,17 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
             )}
             <div className="dialog__actions">
               {running ? (
-                <button type="button" className="btn btn--default" title={t.pubStopHint} onClick={() => void backend.tgStop()}>
-                  {t.pubStop}
+                <button
+                  type="button"
+                  className="btn btn--default"
+                  title={stopping ? t.pubStoppingHint : t.pubStopHint}
+                  disabled={stopping}
+                  onClick={() => {
+                    setStopping(true);
+                    void backend.tgStop();
+                  }}
+                >
+                  {stopping ? t.pubStopping : t.pubStop}
                 </button>
               ) : (
                 <>

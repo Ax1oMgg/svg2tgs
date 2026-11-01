@@ -230,7 +230,14 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
         &job,
         |p| {
             if !quiet {
-                eprint!("\r  {} из {}", p.done, p.total);
+                // Хвост из пробелов стирает прежнюю, более длинную строку.
+                match p.wait {
+                    Some(secs) => eprint!(
+                        "\r  {} из {} — Telegram просит подождать: {secs} с   ",
+                        p.done, p.total
+                    ),
+                    None => eprint!("\r  {} из {}{:40}", p.done, p.total, ""),
+                }
                 let _ = std::io::stderr().flush();
             }
         },

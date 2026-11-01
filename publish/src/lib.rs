@@ -12,7 +12,7 @@ pub mod http;
 pub mod job;
 pub mod rules;
 
-pub use api::{Bot, BotInfo, Field, Form, NewSticker, Owner, SetInfo, Transport};
+pub use api::{Bot, BotInfo, Field, Form, NewSticker, Owner, Pause, SetInfo, Transport};
 pub use error::{Failure, PublishError};
 pub use http::HttpTransport;
 pub use job::{run, validate, Done, Item, Job, Progress, Source};

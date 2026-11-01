@@ -28,8 +28,8 @@ struct State {
     calls: Vec<String>,
     /// Сбой на N-м вызове метода (по общему счёту вызовов).
     fail_at: Option<(usize, Failure)>,
-    /// Ответить 429 один раз на этот метод.
-    rate_limit: Option<&'static str>,
+    /// Ответить 429 на этот метод: сколько раз подряд и сколько секунд ждать.
+    rate_limit: Option<(&'static str, usize, u64)>,
     updates: Value,
     token_ok: bool,
     webhook: bool,
@@ -108,13 +108,15 @@ impl Transport for Fake {
                 return Err(f);
             }
         }
-        if s.rate_limit == Some(method) {
-            s.rate_limit = None;
-            return Err(Failure::Api {
-                code: 429,
-                description: "Too Many Requests: retry after 7".into(),
-                retry_after: Some(7),
-            });
+        if let Some((m, times, secs)) = s.rate_limit {
+            if m == method && times > 0 {
+                s.rate_limit = Some((m, times - 1, secs));
+                return Err(Failure::Api {
+                    code: 429,
+                    description: format!("Too Many Requests: retry after {secs}"),
+                    retry_after: Some(secs),
+                });
+            }
         }
         if !s.token_ok {
             return Err(Failure::Api {
@@ -369,23 +371,107 @@ fn append_checks_the_target() {
     ));
 }
 
+/// Бот, который записывает, сколько он «проспал».
+fn sleepy(fake: &Fake) -> (Bot<Fake>, Arc<Mutex<Duration>>) {
+    let slept = Arc::new(Mutex::new(Duration::ZERO));
+    let w = slept.clone();
+    let b = Bot::new(fake.clone()).with_sleep(move |d| *w.lock().unwrap() += d);
+    (b, slept)
+}
+
 #[test]
-fn rate_limit_is_waited_out() {
-    let fake = Fake::new().with(|s| s.rate_limit = Some("addStickerToSet"));
-    let waits = Arc::new(Mutex::new(Vec::new()));
-    let w = waits.clone();
-    let b = Bot::new(fake.clone()).with_sleep(move |d| w.lock().unwrap().push(d));
+fn rate_limit_is_waited_out_with_countdown() {
+    let fake = Fake::new().with(|s| s.rate_limit = Some(("addStickerToSet", 1, 7)));
+    let (b, slept) = sleepy(&fake);
+    let mut seen = Vec::new();
     run(
         &b,
         BOT,
         OWNER,
         &job(3, SetKind::Stickers),
+        |p| seen.push(p),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(*slept.lock().unwrap(), Duration::from_secs(7));
+    assert_eq!(fake.set(&format!("serdechki_by_{BOT}")).unwrap().len(), 3);
+    // Обратный отсчёт 7…1 на втором файле, затем ожидание снято.
+    let waits: Vec<_> = seen.iter().filter_map(|p| p.wait).collect();
+    assert_eq!(waits, vec![7, 6, 5, 4, 3, 2, 1]);
+    let after = seen.iter().position(|p| p.wait == Some(1)).unwrap() + 1;
+    assert_eq!(
+        seen[after],
+        Progress {
+            done: 1,
+            total: 3,
+            wait: None
+        }
+    );
+}
+
+#[test]
+fn long_and_repeated_waits_are_not_cut_short() {
+    // Telegram раз за разом просит подождать — выгрузка не сдаётся сама.
+    let fake = Fake::new().with(|s| s.rate_limit = Some(("uploadStickerFile", 8, 120)));
+    let (b, slept) = sleepy(&fake);
+    run(
+        &b,
+        BOT,
+        OWNER,
+        &job(2, SetKind::Emoji),
         |_| {},
         &AtomicBool::new(false),
     )
     .unwrap();
-    assert_eq!(*waits.lock().unwrap(), vec![Duration::from_secs(7)]);
-    assert_eq!(fake.set(&format!("serdechki_by_{BOT}")).unwrap().len(), 3);
+    assert_eq!(*slept.lock().unwrap(), Duration::from_secs(8 * 120));
+    assert_eq!(fake.set(&format!("serdechki_by_{BOT}")).unwrap().len(), 2);
+}
+
+#[test]
+fn stop_interrupts_the_wait() {
+    // Без проверки во время ожидания выгрузка ждала бы все 300 секунд
+    // и только потом остановилась бы.
+    let fake = Fake::new().with(|s| s.rate_limit = Some(("addStickerToSet", 1, 300)));
+    let (b, slept) = sleepy(&fake);
+    let stop = AtomicBool::new(false);
+    let err = run(
+        &b,
+        BOT,
+        OWNER,
+        &job(5, SetKind::Stickers),
+        |p| {
+            if p.wait == Some(298) {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &stop,
+    )
+    .unwrap_err();
+    assert_eq!(err, PublishError::Stopped { done: 1 });
+    assert!(*slept.lock().unwrap() <= Duration::from_secs(3));
+    assert_eq!(fake.set(&format!("serdechki_by_{BOT}")).unwrap().len(), 1);
+}
+
+#[test]
+fn stop_interrupts_the_wait_before_the_set_exists() {
+    let fake = Fake::new().with(|s| s.rate_limit = Some(("uploadStickerFile", 1, 60)));
+    let (b, _) = sleepy(&fake);
+    let stop = AtomicBool::new(false);
+    let err = run(
+        &b,
+        BOT,
+        OWNER,
+        &job(5, SetKind::Stickers),
+        |p| {
+            if p.wait.is_some() {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        &stop,
+    )
+    .unwrap_err();
+    assert_eq!(err, PublishError::Stopped { done: 0 });
+    assert!(fake.set(&format!("serdechki_by_{BOT}")).is_none());
 }
 
 #[test]

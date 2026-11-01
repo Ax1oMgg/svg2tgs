@@ -542,7 +542,8 @@ async fn tg_publish(
     .map_err(join_error)?
 }
 
-/// «Остановить»: выгрузка закончится после текущего файла.
+/// «Остановить»: выгрузка закончится после текущего запроса к Telegram,
+/// ожидание по его просьбе (429) прерывается сразу.
 #[tauri::command]
 fn tg_stop(tg: State<'_, Telegram>) {
     tg.stop.store(true, std::sync::atomic::Ordering::Relaxed);

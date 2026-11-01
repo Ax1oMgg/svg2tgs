@@ -68,6 +68,7 @@ const PARAMS = {
   pubGridInfo: ["n", "name", "c", "r"],
   pubGo: ["n"],
   pubProgress: ["done", "total"],
+  pubWait: ["secs"],
   pubDoneText: ["n", "title"],
   pubFound: ["title", "count", "free"],
   pubFoundNoRoom: ["title", "count", "free", "n"],

@@ -69,7 +69,14 @@ impl NewSticker {
 }
 
 /// Сколько раз повторять запрос, если Telegram попросил подождать (429).
+/// Только для служебных запросов; запросы выгрузки ждут сколько угодно,
+/// но через [`Pause`], которую можно прервать.
 const RATE_LIMIT_RETRIES: usize = 5;
+
+/// Что делать, когда Telegram просит подождать `secs` секунд (ответ 429):
+/// переждать и вернуть `true` — запрос повторится; `false` — прервать,
+/// запрос вернёт [`Failure::Stopped`].
+pub type Pause<'a> = &'a mut dyn FnMut(u64) -> bool;
 
 /// Клиент Bot API поверх транспорта.
 pub struct Bot<T: Transport> {
@@ -94,6 +101,28 @@ impl<T: Transport> Bot<T> {
     pub fn with_sleep(mut self, sleep: impl Fn(Duration) + Send + Sync + 'static) -> Self {
         self.sleep = Box::new(sleep);
         self
+    }
+
+    /// Подождать (в тестах — без настоящего сна).
+    pub fn nap(&self, d: Duration) {
+        (self.sleep)(d)
+    }
+
+    /// Вызов с повтором, пока Telegram просит подождать, а `pause` согласна ждать.
+    fn call_paced(&self, method: &str, form: Form, pause: Pause) -> Result<Value, Failure> {
+        loop {
+            match self.transport.call(method, form.clone()) {
+                Err(Failure::Api {
+                    retry_after: Some(secs),
+                    ..
+                }) => {
+                    if !pause(secs.max(1)) {
+                        return Err(Failure::Stopped);
+                    }
+                }
+                other => return other,
+            }
+        }
     }
 
     /// Вызов с повтором, если Telegram просит подождать.
@@ -149,8 +178,14 @@ impl<T: Transport> Bot<T> {
     }
 
     /// `uploadStickerFile`: файл TGS на сервер Telegram, возвращает `file_id`.
-    pub fn upload(&self, owner: i64, filename: &str, bytes: Vec<u8>) -> Result<String, Failure> {
-        let v = self.call(
+    pub fn upload(
+        &self,
+        owner: i64,
+        filename: &str,
+        bytes: Vec<u8>,
+        pause: Pause,
+    ) -> Result<String, Failure> {
+        let v = self.call_paced(
             "uploadStickerFile",
             vec![
                 ("user_id".into(), text(owner)),
@@ -163,6 +198,7 @@ impl<T: Transport> Bot<T> {
                     },
                 ),
             ],
+            pause,
         )?;
         v.get("file_id")
             .and_then(Value::as_str)
@@ -183,9 +219,10 @@ impl<T: Transport> Bot<T> {
         title: &str,
         kind: SetKind,
         stickers: &[NewSticker],
+        pause: Pause,
     ) -> Result<(), Failure> {
         let list: Vec<Value> = stickers.iter().map(NewSticker::json).collect();
-        self.call(
+        self.call_paced(
             "createNewStickerSet",
             vec![
                 ("user_id".into(), text(owner)),
@@ -194,19 +231,27 @@ impl<T: Transport> Bot<T> {
                 ("sticker_type".into(), text(kind.api_type())),
                 ("stickers".into(), text(Value::Array(list))),
             ],
+            pause,
         )
         .map(drop)
     }
 
     /// `addStickerToSet`.
-    pub fn add_sticker(&self, owner: i64, name: &str, sticker: &NewSticker) -> Result<(), Failure> {
-        self.call(
+    pub fn add_sticker(
+        &self,
+        owner: i64,
+        name: &str,
+        sticker: &NewSticker,
+        pause: Pause,
+    ) -> Result<(), Failure> {
+        self.call_paced(
             "addStickerToSet",
             vec![
                 ("user_id".into(), text(owner)),
                 ("name".into(), text(name)),
                 ("sticker".into(), text(sticker.json())),
             ],
+            pause,
         )
         .map(drop)
     }

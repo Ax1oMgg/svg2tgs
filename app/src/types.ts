@@ -281,6 +281,8 @@ export interface PublishRequest {
 export interface PublishProgress {
   done: number;
   total: number;
+  /** Telegram попросил подождать: сколько секунд осталось до повтора. */
+  wait?: number | null;
 }
 
 export interface PublishDone {
