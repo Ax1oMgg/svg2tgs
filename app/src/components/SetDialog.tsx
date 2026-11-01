@@ -21,6 +21,28 @@ type Phase = "edit" | "confirm" | "running" | "broken" | "done";
 const THUMB = 96;
 /** Сколько стикеров скачивать одновременно. */
 const PARALLEL = 4;
+/** Сдвиг указателя, после которого нажатие становится перетаскиванием, px. */
+const DRAG_START = 5;
+/** Полоса у верхнего и нижнего края сетки, где она прокручивается сама, px. */
+const EDGE = 36;
+
+/**
+ * Перетаскивание стикера в сетке. Своё, на событиях указателя (мышь,
+ * тачпад, касание), а не HTML5 drag-and-drop: в программе на Windows его
+ * перехватывает приём файлов в окно (`dragDropEnabled` у Tauri).
+ */
+interface Drag {
+  id: string;
+  pointer: number;
+  x0: number;
+  y0: number;
+  x: number;
+  y: number;
+  /** Сдвинули дальше `DRAG_START` — это уже перетаскивание, не щелчок. */
+  active: boolean;
+  /** Место вставки — индекс в `order` (перед этим стикером); `null` — вне сетки. */
+  to: number | null;
+}
 
 /** Набор, открытый для правки, и что с ним сделал пользователь. */
 interface Draft {
@@ -57,7 +79,11 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [pictures, setPictures] = useState<Record<string, StickerPreview>>({});
   const [selected, setSelected] = useState<string | null>(null);
-  const [dragged, setDragged] = useState<string | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const gridRef = useRef<HTMLOListElement>(null);
+  // После перетаскивания браузер всё равно пришлёт щелчок — его пропускаем.
+  const swallowClick = useRef(false);
   const [phase, setPhase] = useState<Phase>("edit");
   const [progress, setProgress] = useState<PublishProgress>({ done: 0, total: 0 });
   const [stopping, setStopping] = useState(false);
@@ -143,6 +169,84 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
       return { order };
     });
 
+  /** Место вставки под точкой: ближайший стикер, до или после его середины. */
+  const dropIndex = (x: number, y: number): number | null => {
+    const grid = gridRef.current;
+    if (!grid) return null;
+    const box = grid.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top - EDGE || y > box.bottom + EDGE) return null;
+    const cells = Array.from(grid.querySelectorAll<HTMLElement>("[data-index]"));
+    let best: { i: number; d: number; after: boolean } | null = null;
+    for (const el of cells) {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      // Строка важнее столбца: сначала ближайшая по вертикали.
+      const d = Math.abs(cy - y) * 4 + Math.abs(cx - x);
+      if (!best || d < best.d) best = { i: Number(el.dataset.index), d, after: x > cx };
+    }
+    return best ? best.i + (best.after ? 1 : 0) : null;
+  };
+
+  // Перетаскивание: движение и отпускание слушаем на окне, пока тянем.
+  useEffect(() => {
+    if (!drag) return;
+    let scroll = 0;
+    const timer = window.setInterval(() => {
+      const grid = gridRef.current;
+      if (scroll && grid) {
+        grid.scrollTop += scroll;
+        const d = dragRef.current;
+        if (d?.active) set({ ...d, to: dropIndex(d.x, d.y) });
+      }
+    }, 30);
+    const set = (d: Drag | null) => {
+      dragRef.current = d;
+      setDrag(d);
+    };
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || e.pointerId !== d.pointer) return;
+      const active = d.active || Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > DRAG_START;
+      const grid = gridRef.current?.getBoundingClientRect();
+      scroll = !active || !grid ? 0 : e.clientY < grid.top + EDGE ? -8 : e.clientY > grid.bottom - EDGE ? 8 : 0;
+      set({ ...d, x: e.clientX, y: e.clientY, active, to: active ? dropIndex(e.clientX, e.clientY) : null });
+    };
+    const onUp = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || e.pointerId !== d.pointer) return;
+      if (d.active) {
+        swallowClick.current = true;
+        if (d.to != null) {
+          const from = draft?.order.indexOf(d.id) ?? -1;
+          // Индекс вставки считан с вынутым стикером на месте — поправка.
+          move(d.id, from >= 0 && from < d.to ? d.to - 1 : d.to);
+        }
+      }
+      set(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Esc отменяет перетаскивание, а не закрывает окно.
+      e.preventDefault();
+      e.stopPropagation();
+      if (dragRef.current?.active) swallowClick.current = true;
+      set(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("keydown", onKey, true);
+    };
+    // Подписка — на время одного перетаскивания.
+  }, [drag?.id]);
+
   const save = async () => {
     if (!draft) return;
     setError(null);
@@ -186,6 +290,7 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
       aria-labelledby="set-title"
       onCancel={(e) => {
         e.preventDefault();
+        if (dragRef.current) return;
         if (!running) onClose();
       }}
     >
@@ -237,7 +342,11 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
                       : t.setHint}
                   </span>
                 </div>
-                <ol className={`set__grid scroll${draft.kind === "emoji" ? " set__grid--emoji" : ""}`} aria-label={t.pubOrder}>
+                <ol
+                  ref={gridRef}
+                  className={`set__grid scroll${draft.kind === "emoji" ? " set__grid--emoji" : ""}${drag?.active ? " set__grid--dragging" : ""}`}
+                  aria-label={t.pubOrder}
+                >
                   {draft.order.map((id, i) => {
                     const info = byId.get(id);
                     const pic = pictures[id];
@@ -245,28 +354,30 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
                     const emoji = draft.emoji[id] != null ? (parseEmoji(draft.emoji[id])[0] ?? "") : (info?.emoji ?? "");
                     const n = kept.indexOf(id) + 1;
                     return (
-                      <li key={id} className="set__cell-wrap">
+                      <li key={id} className="set__cell-wrap" data-index={i}>
+                        {drag?.active && drag.to === i && drag.id !== id && <span className="set__drop set__drop--before" aria-hidden="true" />}
+                        {drag?.active && drag.to === i + 1 && i === draft.order.length - 1 && drag.id !== id && (
+                          <span className="set__drop set__drop--after" aria-hidden="true" />
+                        )}
                         <button
                           type="button"
-                          draggable
-                          className={`set__cell${selected === id ? " set__cell--active" : ""}${gone ? " set__cell--gone" : ""}${dragged === id ? " set__cell--dragged" : ""}`}
+                          className={`set__cell${selected === id ? " set__cell--active" : ""}${gone ? " set__cell--gone" : ""}${drag?.active && drag.id === id ? " set__cell--dragged" : ""}`}
                           aria-pressed={selected === id}
                           aria-label={`${t.setSticker(i + 1)}: ${emoji}${gone ? `, ${t.setDeleted}` : ""}${draft.cover === id ? `, ${t.pubCover}` : ""}`}
                           title={gone ? t.setDeleted : t.setSticker(n)}
-                          onClick={() => setSelected(selected === id ? null : id)}
-                          onDragStart={(e) => {
-                            setDragged(id);
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/plain", id);
+                          onClick={() => {
+                            if (swallowClick.current) {
+                              swallowClick.current = false;
+                              return;
+                            }
+                            setSelected(selected === id ? null : id);
                           }}
-                          onDragEnd={() => setDragged(null)}
-                          onDragOver={(e) => {
-                            if (dragged && dragged !== id) e.preventDefault();
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (dragged && dragged !== id) move(dragged, i);
-                            setDragged(null);
+                          onPointerDown={(e) => {
+                            if (e.button !== 0 || dragRef.current) return;
+                            swallowClick.current = false;
+                            const d: Drag = { id, pointer: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, active: false, to: null };
+                            dragRef.current = d;
+                            setDrag(d);
                           }}
                         >
                           {pic?.png ? <img src={pic.png} alt="" draggable={false} /> : <span className="spinner spinner--sm" aria-hidden="true" />}
@@ -282,6 +393,11 @@ export function SetDialog({ lang, status, initial, onToast, onClose }: Props) {
                     );
                   })}
                 </ol>
+                {drag?.active && (
+                  <span className="set__ghost" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+                    {pictures[drag.id]?.png && <img src={pictures[drag.id].png ?? ""} alt="" />}
+                  </span>
+                )}
 
                 {selected && selInfo && (
                   <div className="set__edit">
