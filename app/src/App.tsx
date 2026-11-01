@@ -11,6 +11,7 @@ import { PublishDialog, type PublishSource } from "./components/PublishDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
+import { WebNotice } from "./components/WebNotice";
 import { strings } from "./i18n";
 import { exportName, exportSubfolder, loadPrefs, savePrefs, type Prefs } from "./prefs";
 import {
@@ -37,6 +38,19 @@ interface ConflictAsk {
   rest: number;
   resolve: (r: { choice: ConflictChoice; all: boolean }) => void;
 }
+
+/** Плашка веб-версии закрыта — больше не показывать. */
+const WEB_NOTICE_KEY = "svg2tgs.webNotice.v1";
+const webNoticeSeen = () => {
+  try {
+    return localStorage.getItem(WEB_NOTICE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+/** Замечания о шрифтах — в веб-версии о них говорится громко. */
+const FONT_CODES = ["font_replaced", "glyphs_missing"];
 
 /** Через сколько закрывается уведомление с «Отменить». */
 const UNDO_MS = 6000;
@@ -89,6 +103,8 @@ export function App() {
   const [importing, setImporting] = useState<{ text: string } | null>(null);
   const [conflict, setConflict] = useState<ConflictAsk | null>(null);
   const [browserMode, setBrowserMode] = useState(false);
+  const web = backend.isWeb();
+  const [webNotice, setWebNotice] = useState(() => web && !webNoticeSeen());
   const [version, setVersion] = useState("");
   // Выгрузка в Telegram: состояние читается без сети.
   const [tg, setTg] = useState<TgStatus>({ enabled: false, bot: null, owner: null, sets: [] });
@@ -108,7 +124,7 @@ export function App() {
 
   const addPaths = useCallback(
     async (paths: string[]) => {
-      if (!backend.isTauri()) {
+      if (!backend.isTauri() && !web) {
         add(backend.SAMPLE_PATHS.map((p) => ({ name: p.split("/").pop()!, source: { kind: "path", path: p } })));
         return;
       }
@@ -116,7 +132,7 @@ export function App() {
       const ids = add(entries.map((e) => ({ name: e.name, source: { kind: "path", path: e.path } })));
       if (ids.length > 0) setSelectedId((s) => s ?? ids[0]);
     },
-    [add, prefs.recursive],
+    [add, prefs.recursive, web],
   );
   const addFiles = () => void backend.pickPaths("files").then(addPaths);
   const addFolder = () => void backend.pickPaths("folder").then(addPaths);
@@ -131,7 +147,13 @@ export function App() {
     void backend.startupPaths().then((paths) => {
       if (paths.length > 0) void addPaths(paths);
     });
-    if (!backend.isTauri() && new URLSearchParams(location.search).has("demo")) void addPaths([]);
+    if (!backend.isTauri() && !web && new URLSearchParams(location.search).has("demo")) void addPaths([]);
+    // Веб-версия: папка экспорта из прошлого раза хранится в браузере.
+    if (web && prefs.export.dir) {
+      void backend.restoreFolder(prefs.export.dir).then((ok) => {
+        if (!ok) setPrefs((old) => ({ ...old, export: { ...old.export, dir: null } }));
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -158,6 +180,16 @@ export function App() {
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
   }, [add, t]);
+
+  // Веб-версия: о замене шрифта — громко, один раз за сеанс.
+  const fontToastShown = useRef(false);
+  useEffect(() => {
+    if (!web || fontToastShown.current) return;
+    const hit = items.find((it) => it.outcome?.warnings.some((w) => FONT_CODES.includes(w.code)));
+    if (!hit) return;
+    fontToastShown.current = true;
+    setToast({ text: t.webFontToast(hit.name), dismissOnAction: true });
+  }, [items, web, t]);
 
   // Выбранный файл всегда существует, если список не пуст.
   useEffect(() => {
@@ -314,6 +346,8 @@ export function App() {
     if (ids.length === 0) return;
     setExporting(true);
     try {
+      // Веб-версия спрашивает доступ к папке — только сразу по нажатию.
+      await backend.prepareExport();
       const pick = () => itemsRef.current.filter((it) => ids.includes(it.id));
       if (pick().some((it) => it.status === "pending")) {
         setToast({ text: t.exportWait });
@@ -331,7 +365,7 @@ export function App() {
       // SVG из буфера лежит не в папке: если папка экспорта не задана,
       // для таких файлов её нужно выбрать.
       let pastedDir: string | null = null;
-      if (!ex.dir && ready.some((it) => it.source.kind === "text")) {
+      if (!ex.dir && !web && ready.some((it) => it.source.kind === "text")) {
         pastedDir = await backend.pickFolder(undefined, t.pastedNeedFolder);
       }
       const requests: SaveRequest[] = ready.map((it) => ({
@@ -432,7 +466,9 @@ export function App() {
       : null;
   const ready = items.filter((it) => (it.status === "ok" || it.status === "warn") && it.outcome && !it.outcome.error);
   const connected = !!tg.bot && !!tg.owner;
-  const publish = tg.enabled
+  // Как в программе: кнопки нет, пока выгрузка не включена в «Настройках»;
+  // в веб-версии её включить нельзя — кнопки нет совсем.
+  const publish = !web && tg.enabled
     ? {
         title: !connected ? t.tgPublishNoBot : sliced ? t.tgPublishGrid(sliced.name) : t.tgPublishList,
         onClick:
@@ -467,7 +503,11 @@ export function App() {
       selectedCount={Math.max(chosen.length, selected ? 1 : 0)}
       actualGrid={selected?.outcome && !selected.outcome.error ? selected.outcome.grid : null}
       exportPrefs={prefs.export}
-      onExportPrefs={(e) => patch({ export: e })}
+      onExportPrefs={(e) => {
+        if (!e.dir && prefs.export.dir) backend.clearFolder();
+        patch({ export: e });
+      }}
+      web={web}
       sections={sections}
       onSection={onSection}
       onCrop={() => selected && setCropping(true)}
@@ -516,6 +556,7 @@ export function App() {
           />
           <Preview
             lang={prefs.lang}
+            web={web}
             item={selected}
             kind={prefs.previewKind}
             onKind={(previewKind) => patch({ previewKind })}
@@ -554,6 +595,7 @@ export function App() {
       {settingsOpen && (
         <SettingsDialog
           lang={prefs.lang}
+          web={web}
           theme={prefs.theme}
           version={version}
           tg={tg}
@@ -605,6 +647,20 @@ export function App() {
       {toast && <Toast toast={toast} closeLabel={t.close} onClose={() => setToast(null)} />}
 
       {browserMode && <div className="badge-browser">{t.browserMode}</div>}
+
+      {webNotice && (
+        <WebNotice
+          lang={prefs.lang}
+          onClose={() => {
+            setWebNotice(false);
+            try {
+              localStorage.setItem(WEB_NOTICE_KEY, "1");
+            } catch {
+              // Не запомнится — плашка покажется в следующий раз.
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

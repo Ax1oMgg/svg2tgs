@@ -1,0 +1,21 @@
+[package]
+name = "svg2tgs-web"
+description = "Веб-версия svg2tgs: ядро и превью исходника в WebAssembly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# cdylib — модуль WebAssembly для браузера, rlib — для тестов на компьютере.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+svg2tgs-core.workspace = true
+svg2tgs-render = { path = "../render", default-features = false }
+flate2 = "1"
+serde.workspace = true
+serde_json.workspace = true

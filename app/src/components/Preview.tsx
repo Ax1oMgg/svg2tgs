@@ -9,6 +9,8 @@ import { formatSize } from "./FileList";
 
 interface Props {
   lang: Lang;
+  /** Веб-версия: результат рисует lottie-web — об этом подпись. */
+  web?: boolean;
   item: FileItem | null;
   /** Стикер или эмодзи — только вид, файл не пересобирается. */
   kind: PreviewKind;
@@ -48,7 +50,7 @@ const clampView = (v: View): View => {
  * «Крупно» — исходник и результат рядом. Результат рисуется rlottie — тем же
  * движком, что в Telegram.
  */
-export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, onBg, cropEditor }: Props) {
+export function Preview({ lang, web, item, kind, onKind, modified, mode, bg, onMode, onBg, cropEditor }: Props) {
   const t = strings[lang];
   const [images, setImages] = useState<{ svg: string | null; tgs: string | null }>({
     svg: null,
@@ -195,7 +197,9 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
               <figcaption>
                 {sliced
                   ? t.sliceResult(grid[0] * grid[1], formatSize(item.outcome?.tgsBytes ?? 0, lang))
-                  : t.result}
+                  : web
+                    ? t.webResult
+                    : t.result}
                 {!sliced && item.outcome?.tgsBytes != null && ` · ${formatSize(item.outcome.tgsBytes, lang)}`}
               </figcaption>
             </figure>
@@ -217,8 +221,15 @@ export function Preview({ lang, item, kind, onKind, modified, mode, bg, onMode, 
         )}
       </div>
 
+      {web && item && item.status !== "error" && !cropEditor && <p className="stage__engine">{t.webEngineNote}</p>}
+
       {item && item.outcome && !item.outcome.error && (
         <section className="notes" aria-live="polite">
+          {web && warnings.some((w) => w.code === "font_replaced" || w.code === "glyphs_missing") && (
+            <p className="notes__banner" role="alert">
+              {t.webFontBanner}
+            </p>
+          )}
           {warnings.length === 0 ? (
             <p className="notes__ok">{t.allGood}</p>
           ) : (

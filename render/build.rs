@@ -7,6 +7,12 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    // Без rlottie (веб-версия) собирать нечего.
+    if std::env::var_os("CARGO_FEATURE_RLOTTIE").is_none() {
+        println!("cargo:rustc-env=SVG2TGS_RLOTTIE_VENDOR=none");
+        return;
+    }
     let vendor = if cfg!(feature = "telegram-rlottie") {
         "rlottie-telegram"
     } else {
@@ -80,7 +86,6 @@ fn main() {
         println!("cargo:rustc-link-lib=shlwapi");
     }
 
-    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", root.display());
     println!("cargo:rustc-env=SVG2TGS_RLOTTIE_VENDOR={vendor}");
 }

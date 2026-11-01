@@ -12,6 +12,9 @@ app/             настольное приложение (Tauri 2 + React + Ty
   src/locales/   переводы — по файлу на язык (TRANSLATIONS.md)
   src/styles/tokens.css   дизайн-токены (общие с макетом, DESIGN.md)
   src-tauri/     Rust-часть приложения
+web/             веб-версия: ядро и превью исходника в WebAssembly
+  fonts/         встроенный шрифт (Noto Sans, OFL) — в браузере системных нет
+app/src/web/     веб-часть интерфейса: фоновый поток, файлы, скачивание
 tests/fixtures/  тестовые SVG с описанием, что каждый проверяет
 docs/            документация
 .github/         проверки и сборка установщиков (GitHub Actions)
@@ -94,6 +97,33 @@ cargo run -p svg2tgs-cli -- tests/fixtures -o out
 ```sh
 cargo test -p svg2tgs-render --features telegram-rlottie
 ```
+
+## Веб-версия
+
+Тот же интерфейс, но ядро — в WebAssembly (`web/`), превью результата —
+lottie-web, файлы — из браузера. Нужна цель Rust для WebAssembly (один раз):
+
+```sh
+rustup target add wasm32-unknown-unknown
+```
+
+```sh
+cd app
+npm run dev:web      # собрать ядро и открыть http://127.0.0.1:1420/svg2tgs/
+npm run build:web    # сайт в app/dist-web (база /svg2tgs/, как на Pages)
+npm run preview:web  # открыть собранный сайт
+```
+
+`npm run wasm` собирает только модуль ядра (`cargo build -p svg2tgs-web
+--target wasm32-unknown-unknown --profile web`) в `app/src/web/wasm/`.
+Обычный `npm run dev` по-прежнему открывает интерфейс с тестовыми данными,
+а сборка программы (`npm run build`, Tauri) веб-часть не содержит:
+псевдоним `@web` ведёт там к заглушке `src/web/stub.ts`.
+
+Модуль ничего не импортирует (ни сети, ни файлов), обмен — через его
+память (`web/src/lib.rs`). Сайт выкладывает на GitHub Pages
+`.github/workflows/pages.yml` при публикации выпуска; один раз нужно
+включить Settings → Pages → Source: GitHub Actions.
 
 ## Проверка на большом наборе SVG
 

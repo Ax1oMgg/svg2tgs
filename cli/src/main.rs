@@ -490,9 +490,9 @@ fn tile_paths(dst: &Path, n: usize) -> Vec<PathBuf> {
         return vec![dst.to_path_buf()];
     }
     let stem = dst.file_stem().unwrap_or_default().to_string_lossy();
-    let digits = n.to_string().len().max(2);
-    (1..=n)
-        .map(|i| dst.with_file_name(format!("{stem}_{i:0digits$}.tgs")))
+    svg2tgs_core::naming::tile_names(&stem, n)
+        .into_iter()
+        .map(|name| dst.with_file_name(format!("{name}.tgs")))
         .collect()
 }
 

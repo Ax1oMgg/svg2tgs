@@ -8,16 +8,21 @@
 //!   картинку «эталон / результат / различия».
 
 mod compare;
+#[cfg(feature = "rlottie")]
 mod ffi;
 
+#[cfg(feature = "rlottie")]
 use std::ffi::CString;
+#[cfg(feature = "rlottie")]
 use std::io::Read;
+#[cfg(feature = "rlottie")]
 use std::sync::Mutex;
 
 pub use compare::{compare, diff_sheet, Diff};
 use svg2tgs_core::Options;
 
-/// Какой rlottie вкомпилирован: `rlottie-samsung` или `rlottie-telegram`.
+/// Какой rlottie вкомпилирован: `rlottie-samsung`, `rlottie-telegram`
+/// или `none` (сборка без rlottie — веб-версия).
 pub const RLOTTIE_VENDOR: &str = env!("SVG2TGS_RLOTTIE_VENDOR");
 
 /// Картинка RGBA, 8 бит на канал, прозрачность не умножена на цвет.
@@ -90,8 +95,10 @@ pub enum RenderError {
 
 /// rlottie собран без потоков и кэша; вызовы сериализуются, чтобы
 /// параллельные тесты и превью не мешали друг другу.
+#[cfg(feature = "rlottie")]
 static RLOTTIE: Mutex<()> = Mutex::new(());
 
+#[cfg(feature = "rlottie")]
 /// Рисует кадр Lottie JSON квадратом `size`×`size` через rlottie.
 pub fn render_lottie(json: &[u8], size: u32, frame: usize) -> Result<Image, RenderError> {
     if size == 0 || size > 4096 {
@@ -137,6 +144,7 @@ pub fn render_lottie(json: &[u8], size: u32, frame: usize) -> Result<Image, Rend
     Ok(img)
 }
 
+#[cfg(feature = "rlottie")]
 /// Рисует кадр TGS (gzip-сжатый Lottie) так, как его покажет Telegram.
 pub fn render_tgs(tgs: &[u8], size: u32, frame: usize) -> Result<Image, RenderError> {
     let mut json = Vec::new();
@@ -146,6 +154,7 @@ pub fn render_tgs(tgs: &[u8], size: u32, frame: usize) -> Result<Image, RenderEr
     render_lottie(&json, size, frame)
 }
 
+#[cfg(feature = "rlottie")]
 /// Склеивает клетки нарезки (TGS по строкам слева направо) в одну картинку:
 /// клетка — `cell`×`cell` пикселей, вплотную, как эмодзи в строке Telegram.
 pub fn render_tgs_grid(tiles: &[Vec<u8>], cols: u32, cell: u32) -> Result<Image, RenderError> {
@@ -290,6 +299,27 @@ fn rounded_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Option<tiny_skia:
 }
 
 #[cfg(test)]
+mod svg_tests {
+    use super::*;
+
+    #[test]
+    fn svg_reference_uses_converter_fit() {
+        // Квадрат 0…10 в viewBox 20×10: вписывается в 512 с отступом 128 сверху.
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="10" height="10"/></svg>"#;
+        let img = render_svg(svg, 512, &Options::default()).unwrap();
+        assert_eq!(img.pixel(10, 200)[3], 255);
+        assert_eq!(img.pixel(10, 100)[3], 0);
+        assert_eq!(img.pixel(300, 200)[3], 0);
+    }
+
+    #[test]
+    fn png_roundtrip_has_signature() {
+        let png = Image::new(4, 4).to_png();
+        assert_eq!(&png[1..4], b"PNG");
+    }
+}
+
+#[cfg(all(test, feature = "rlottie"))]
 mod tests {
     use super::*;
 
@@ -337,16 +367,6 @@ mod tests {
             render_lottie(RED_SQUARE.as_bytes(), 0, 0),
             Err(RenderError::BadSize)
         ));
-    }
-
-    #[test]
-    fn svg_reference_uses_converter_fit() {
-        // Квадрат 0…10 в viewBox 20×10: вписывается в 512 с отступом 128 сверху.
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="10" height="10"/></svg>"#;
-        let img = render_svg(svg, 512, &Options::default()).unwrap();
-        assert_eq!(img.pixel(10, 200)[3], 255);
-        assert_eq!(img.pixel(10, 100)[3], 0);
-        assert_eq!(img.pixel(300, 200)[3], 0);
     }
 
     /// Обёртка анимации 100×100 вокруг готовых слоёв.
@@ -440,11 +460,5 @@ mod tests {
             0,
             "такую фигуру растеризатор не рисует"
         );
-    }
-
-    #[test]
-    fn png_roundtrip_has_signature() {
-        let png = Image::new(4, 4).to_png();
-        assert_eq!(&png[1..4], b"PNG");
     }
 }

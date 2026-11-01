@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { canPickFolder } from "../backend";
 import type { Lang } from "../i18n";
 import { strings } from "../i18n";
 import type { ExportPrefs, Toggle } from "../prefs";
@@ -58,6 +59,8 @@ interface Props {
   /** Кнопка «В Телеграм» видна, только когда выгрузка включена в «Настройках». */
   publish: { onClick: (() => void) | null; title: string } | null;
   onChooseDir: () => void;
+  /** Веб-версия: без папки — скачивание, папку можно выбрать не везде. */
+  web?: boolean;
   /** Открыть кадрирование мышью в превью. */
   onCrop: () => void;
   /** Импорт и экспорт настроек («Дополнительно»). */
@@ -255,16 +258,16 @@ export function ExportPanel(p: Props) {
             <span dir="ltr">{ex.dir}</span>
           </output>
         ) : (
-          <output className="path path--placeholder" title={t.toSourceHint}>
-            <span dir="ltr">{t.toSource}</span>
+          <output className="path path--placeholder" title={p.web ? t.webDownloadHint : t.toSourceHint}>
+            <span dir="ltr">{p.web ? t.webDownload : t.toSource}</span>
           </output>
         )}
         {ex.dir && (
           <button
             type="button"
             className="btn btn--text btn--icon export__reset"
-            aria-label={t.toSource}
-            title={t.toSource}
+            aria-label={p.web ? t.webDownload : t.toSource}
+            title={p.web ? t.webDownload : t.toSource}
             onClick={() => setEx({ dir: null })}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
@@ -272,7 +275,13 @@ export function ExportPanel(p: Props) {
             </svg>
           </button>
         )}
-        <button type="button" className="btn btn--default" title={t.chooseHint} onClick={p.onChooseDir}>
+        <button
+          type="button"
+          className="btn btn--default"
+          title={canPickFolder() ? t.chooseHint : t.webFolderUnavailable}
+          disabled={!canPickFolder()}
+          onClick={p.onChooseDir}
+        >
           {t.choose}
         </button>
       </div>

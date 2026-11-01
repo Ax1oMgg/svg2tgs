@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "render", "publish", "cli", "app/src-tauri"]
+members = ["core", "render", "publish", "cli", "web", "app/src-tauri"]
 default-members = ["core", "render", "publish", "cli"]
 
 [workspace.package]
@@ -23,3 +23,9 @@ thiserror = "2"
 lto = true
 codegen-units = 1
 strip = true
+
+# Веб-версия: модуль WebAssembly скачивается в браузер, размер важнее
+# скорости (`cargo build -p svg2tgs-web --target wasm32-unknown-unknown --profile web`).
+[profile.web]
+inherits = "release"
+opt-level = "s"

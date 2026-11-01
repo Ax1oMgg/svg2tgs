@@ -11,10 +11,14 @@ build = "build.rs"
 links = "rlottie"
 
 [features]
+default = ["rlottie"]
+# rlottie (C++) для TGS-превью и проверок. Без него остаётся только
+# render_svg — так рендер собирается в WebAssembly для веб-версии.
+rlottie = []
 # По умолчанию собирается rlottie от Samsung (MIT). С этим флагом — форк
 # Telegram Desktop (LGPL-2.1), тот же движок, что в клиенте Telegram.
 # Подробности и выбор — render/vendor/README.md.
-telegram-rlottie = []
+telegram-rlottie = ["rlottie"]
 
 [dependencies]
 svg2tgs-core.workspace = true
@@ -25,3 +29,15 @@ thiserror.workspace = true
 
 [build-dependencies]
 cc = "1.2"
+
+[[test]]
+name = "pixel"
+required-features = ["rlottie"]
+
+[[test]]
+name = "web_font"
+required-features = ["rlottie"]
+
+[[example]]
+name = "corpus"
+required-features = ["rlottie"]

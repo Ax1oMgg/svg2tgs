@@ -12,7 +12,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": { "@web": ["./src/web/client.ts"] }
   },
   "include": ["src", "vite.config.ts"]
 }
