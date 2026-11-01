@@ -24,6 +24,56 @@ export interface Grid {
   rows: number;
 }
 
+/** Способ трассировки картинки — `svg2tgs_core::TracePreset`. */
+export type TracePreset = "auto" | "drawing" | "pixel" | "photo";
+
+/**
+ * Трассировка растра (PNG, JPEG, WebP) — `svg2tgs_core::Trace`. Пусто
+ * (`null`) — умолчание пресета; смена пресета сбрасывает в `null`.
+ */
+export interface Trace {
+  preset: TracePreset;
+  colors?: number | null;
+  /** 0 — крупнее, 100 — мельче. */
+  details?: number | null;
+  remove_bg?: boolean;
+  gradients?: boolean | null;
+}
+
+/** Значения пресетов для интерфейса — те же, что `TracePreset::params`
+ *  в `core/src/trace.rs` (сверяются тестом ядра `ts_mirror_matches`). */
+export const TRACE_PARAMS: Record<Exclude<TracePreset, "auto">, { colors: [number, number, number]; details: number; gradients: boolean }> = {
+  drawing: { colors: [2, 64, 16], details: 50, gradients: true },
+  pixel: { colors: [2, 64, 64], details: 100, gradients: false },
+  photo: { colors: [4, 64, 24], details: 35, gradients: true },
+};
+
+export const DEFAULT_TRACE: Trace = { preset: "auto", colors: null, details: null, remove_bg: false, gradients: null };
+
+/** Что сделала трассировка — `svg2tgs_core::TraceInfo`. */
+export interface TraceInfo {
+  preset: Exclude<TracePreset, "auto">;
+  auto: boolean;
+  width: number;
+  height: number;
+  traced_width: number;
+  traced_height: number;
+  colors: number;
+  details: number;
+  colors_min: number;
+  colors_max: number;
+  gradients: boolean;
+  gradient_count: number;
+  block: number;
+  background_removed: boolean;
+}
+
+/** Картинка, которую программа трассирует (а не SVG). */
+export const isRaster = (name: string) => /\.(png|jpe?g|webp)$/i.test(name);
+
+/** Имя без расширения SVG или картинки. */
+export const stripExt = (name: string) => name.replace(/\.(svg|png|jpe?g|webp)$/i, "");
+
 export type Optimization =
   | { mode: "auto" }
   | { mode: "lossless" }
@@ -71,6 +121,8 @@ export interface Options {
   /** `null` — без обводки. */
   outline?: Outline | null;
   optimization: Optimization;
+  /** Трассировка картинки; у SVG не действует. */
+  trace?: Trace;
   fps?: number | null;
   duration_secs?: number | null;
 }
@@ -93,6 +145,8 @@ export interface Outcome {
   aspect: number;
   warnings: Warning[];
   error: string | null;
+  /** Что сделала трассировка (только у картинок). */
+  trace?: TraceInfo | null;
 }
 
 export type Source = { kind: "path"; path: string } | { kind: "text"; text: string };
@@ -156,6 +210,7 @@ export const DEFAULT_OPTIONS: Options = {
   grid_auto: true,
   outline: null,
   optimization: { mode: "auto" },
+  trace: DEFAULT_TRACE,
 };
 
 export const DEFAULT_OUTLINE: Outline = { width: 12, color: "#ffffff" };
@@ -166,6 +221,7 @@ export const DEFAULT_BORDER: Outline = { width: 12, color: "#3157d5" };
 /** Ключи настроек по разделам панели — для сброса раздела и для
  *  автоматического перехода на «этого файла» при правке трансформации. */
 export const SECTION_KEYS = {
+  trace: ["trace"],
   position: ["bounds", "fit", "scale", "position_x", "position_y", "padding"],
   transform: ["flip_h", "flip_v", "aspect", "rotation", "crop"],
   style: ["outline"],

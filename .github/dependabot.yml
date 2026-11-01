@@ -20,9 +20,10 @@ updates:
     open-pull-requests-limit: 3
     groups:
       # usvg и resvg обновляются только вместе: resvg тянет usvg своей версии,
-      # и по отдельности типы ядра и рендера не сходятся.
+      # и по отдельности типы ядра и рендера не сходятся. Декодеры картинок
+      # трассировки (крейт `trace`) — те же версии, что у resvg: с ним же.
       resvg:
-        patterns: ["usvg", "resvg"]
+        patterns: ["usvg", "resvg", "png", "zune-jpeg", "zune-core", "image-webp"]
       rust:
         update-types: [minor, patch]
     commit-message:

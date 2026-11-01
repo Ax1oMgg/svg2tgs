@@ -6,7 +6,7 @@ use std::io::Read;
 
 use serde::{Deserialize, Serialize};
 use svg2tgs_core::naming::{safe_file_name, tile_names};
-use svg2tgs_core::{Grid, Options, Warning};
+use svg2tgs_core::{Grid, Options, TraceInfo, Warning};
 
 /// Команда из фонового потока браузера.
 #[derive(Deserialize, Debug)]
@@ -74,6 +74,9 @@ pub enum Reply {
 
 /// Один файл и результат его последней конвертации.
 struct Item {
+    /// Содержимое файла: SVG или картинка (PNG, JPEG, WebP).
+    data: Vec<u8>,
+    /// SVG для превью исходника: у картинки — она сама внутри SVG.
     svg: Vec<u8>,
     options: Options,
     tiles: Vec<Vec<u8>>,
@@ -90,6 +93,8 @@ pub struct Outcome {
     aspect: f32,
     warnings: Vec<Warning>,
     error: Option<&'static str>,
+    /// Что сделала трассировка (только у картинок).
+    trace: Option<TraceInfo>,
 }
 
 impl Outcome {
@@ -101,6 +106,7 @@ impl Outcome {
             aspect: 1.0,
             warnings: Vec::new(),
             error: Some(code),
+            trace: None,
         }
     }
 }
@@ -180,16 +186,19 @@ impl Session {
     }
 
     fn convert(&mut self, id: String, options: Options, data: &[u8]) -> Outcome {
-        let svg = if data.is_empty() {
+        let data = if data.is_empty() {
             match self.items.get(&id) {
-                Some(prev) => prev.svg.clone(),
+                Some(prev) => prev.data.clone(),
                 None => return Outcome::failed(&id, "read_failed"),
             }
         } else {
             data.to_vec()
         };
-        match svg2tgs_core::convert_grid(&svg, &options) {
-            Ok(out) => {
+        let svg = svg2tgs_trace::source_svg(&data, &options)
+            .map(|s| s.into_owned())
+            .unwrap_or_default();
+        match svg2tgs_trace::convert_any(&data, &options, options.preset.max_bytes()) {
+            Ok((out, trace)) => {
                 let mut warnings: Vec<Warning> = Vec::new();
                 for w in out.tiles.iter().flat_map(|c| &c.warnings) {
                     if !warnings.contains(w) {
@@ -203,11 +212,13 @@ impl Session {
                     aspect: out.aspect,
                     warnings,
                     error: None,
+                    trace,
                 };
                 let tiles = out.tiles.into_iter().map(|c| c.tgs).collect();
                 self.items.insert(
                     id,
                     Item {
+                        data,
                         svg,
                         options,
                         tiles,
@@ -217,14 +228,11 @@ impl Session {
                 outcome
             }
             Err(e) => {
-                let code = match e {
-                    svg2tgs_core::Error::InvalidSvg(_) => "invalid_svg",
-                    svg2tgs_core::Error::Empty => "empty",
-                    svg2tgs_core::Error::InvalidOption(_) => "invalid_option",
-                };
+                let code = e.code();
                 self.items.insert(
                     id.clone(),
                     Item {
+                        data,
                         svg,
                         options,
                         tiles: Vec::new(),
@@ -339,6 +347,34 @@ mod tests {
             r#"{{"cmd":"convert","id":"{id}","options":{options}}}"#
         ));
         json_of(s.run(c, svg))
+    }
+
+    #[test]
+    fn pictures_are_traced_and_previewed() {
+        let png = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/raster/pixel-art.png"
+        ))
+        .unwrap();
+        let mut s = Session::default();
+        json_of(s.run(Command::Init, &[]));
+        let o = convert(&mut s, "p", &png, "{}");
+        assert_eq!(o["error"], serde_json::Value::Null);
+        assert_eq!(o["trace"]["preset"], "pixel");
+        // Превью исходника — картинка, нарисованная resvg (PNG).
+        match s.run(
+            cmd(r#"{"cmd":"preview","id":"p","kind":"svg","size":64}"#),
+            &[],
+        ) {
+            Reply::Bytes(b) => assert!(b.starts_with(b"\x89PNG")),
+            other => panic!("{other:?}"),
+        }
+        // Размер исходника — размер картинки.
+        let size = json_of(s.run(cmd(r#"{"cmd":"source_size","id":"p"}"#), &[]));
+        assert_eq!(size, serde_json::json!([128.0, 128.0]));
+        // Повтор с другими настройками — по запомненной картинке.
+        let again = convert(&mut s, "p", &[], r#"{"trace":{"preset":"drawing"}}"#);
+        assert_eq!(again["trace"]["preset"], "drawing");
     }
 
     #[test]

@@ -220,3 +220,104 @@ fn publish_requires_title() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--title"));
 }
+
+#[test]
+fn pictures_are_traced_with_flags() {
+    let out_dir = tmp("raster");
+    let out = bin()
+        .arg(fixtures().join("raster"))
+        .arg("-o")
+        .arg(&out_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = json(&out);
+    assert_eq!(report.len(), 5, "PNG, JPEG и WebP найдены в папке");
+    let by_name = |n: &str| {
+        report
+            .iter()
+            .find(|r| r["input"].as_str().unwrap().ends_with(n))
+            .unwrap()
+            .clone()
+    };
+    let pixel = by_name("pixel-art.png");
+    assert_eq!(pixel["trace"]["preset"], "pixel");
+    assert_eq!(pixel["trace"]["block"], 8);
+    assert!(Path::new(pixel["output"].as_str().unwrap()).exists());
+    assert_eq!(by_name("photo.jpg")["trace"]["preset"], "photo");
+    assert_eq!(by_name("star.webp")["trace"]["preset"], "drawing");
+
+    // Флаги трассировки и «Убрать фон».
+    let out = bin()
+        .arg(fixtures().join("raster/logo-white.jpg"))
+        .args(["-o"])
+        .arg(&out_dir)
+        .args([
+            "--on-conflict",
+            "overwrite",
+            "--json",
+            "--trace",
+            "drawing",
+            "--colors",
+            "4",
+            "--details",
+            "20",
+            "--remove-bg",
+            "--no-gradients",
+        ])
+        .output()
+        .unwrap();
+    let r = &json(&out)[0];
+    assert_eq!(r["trace"]["preset"], "drawing");
+    assert_eq!(r["trace"]["auto"], false);
+    assert_eq!(r["trace"]["colors"], 4);
+    assert_eq!(r["trace"]["details"], 20);
+    assert_eq!(r["trace"]["gradients"], false);
+    assert_eq!(r["trace"]["background_removed"], true);
+}
+
+#[test]
+fn trace_flags_change_only_their_fields_over_options_file() {
+    let dir = tmp("trace-options");
+    let file = dir.join("o.json");
+    std::fs::write(
+        &file,
+        r#"{"trace": {"preset": "drawing", "colors": 6, "remove_bg": true}}"#,
+    )
+    .unwrap();
+    let out = bin()
+        .arg(fixtures().join("raster/star.webp"))
+        .arg("-o")
+        .arg(&dir)
+        .arg("--options")
+        .arg(&file)
+        .args(["--details", "80", "--json"])
+        .output()
+        .unwrap();
+    let r = &json(&out)[0];
+    assert_eq!(r["trace"]["preset"], "drawing");
+    assert_eq!(r["trace"]["colors"], 6);
+    assert_eq!(r["trace"]["details"], 80);
+}
+
+#[test]
+fn broken_picture_is_an_error() {
+    let dir = tmp("bad-png");
+    let bad = dir.join("bad.png");
+    std::fs::write(&bad, b"\x89PNG\r\n\x1a\nbroken").unwrap();
+    let out = bin()
+        .arg(&bad)
+        .arg("-o")
+        .arg(&dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(json(&out)[0]["error"], "invalid_image");
+}

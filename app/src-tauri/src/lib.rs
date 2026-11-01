@@ -12,12 +12,16 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use svg2tgs_core::{Grid, Options, Warning};
+use svg2tgs_core::{Grid, Options, TraceInfo, Warning};
 use tauri::{Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 /// Один добавленный файл и результат его последней конвертации.
 struct Item {
+    /// Содержимое файла: SVG или картинка (PNG, JPEG, WebP).
+    data: Vec<u8>,
+    /// SVG для превью исходника и кадрирования: у картинки — она сама
+    /// внутри SVG того же размера (`svg2tgs_trace::preview_svg`).
     svg: Vec<u8>,
     options: Options,
     /// Готовые TGS: один файл или клетки нарезки по строкам.
@@ -57,7 +61,7 @@ fn startup_paths() -> Vec<String> {
         .collect()
 }
 
-/// Разворачивает перетащенные пути: папки — в SVG-файлы внутри.
+/// Разворачивает перетащенные пути: папки — в SVG и картинки внутри.
 #[tauri::command]
 async fn expand_paths(paths: Vec<String>, recursive: bool) -> Vec<files::Entry> {
     tauri::async_runtime::spawn_blocking(move || files::expand(&paths, recursive))
@@ -65,11 +69,11 @@ async fn expand_paths(paths: Vec<String>, recursive: bool) -> Vec<files::Entry> 
         .unwrap_or_default()
 }
 
-/// Откуда взять SVG.
+/// Откуда взять SVG или картинку.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum Source {
-    /// Файл на диске.
+    /// Файл на диске (SVG, PNG, JPEG, WebP).
     Path { path: String },
     /// SVG-код (вставка из буфера).
     Text { text: String },
@@ -87,11 +91,14 @@ struct Outcome {
     /// Соотношение сторон рисунка после трансформаций (ширина / высота).
     aspect: f32,
     warnings: Vec<Warning>,
-    /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`.
+    /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`,
+    /// `invalid_image`, `animated_image`, `image_too_large`.
     error: Option<String>,
+    /// Что сделала трассировка (только у картинок).
+    trace: Option<TraceInfo>,
 }
 
-/// Конвертирует SVG и запоминает результат под `id`.
+/// Конвертирует SVG или картинку и запоминает результат под `id`.
 #[tauri::command]
 async fn convert(
     id: String,
@@ -101,18 +108,21 @@ async fn convert(
 ) -> Result<Outcome, String> {
     let previous = state.items.lock().unwrap().get(&id).cloned();
     let work = move || {
-        let svg = match (source, previous) {
+        let data = match (source, previous) {
             // Файл с диска читается при первом добавлении; при смене
             // настроек используется уже прочитанное содержимое.
-            (_, Some(prev)) => Ok(prev.svg.clone()),
+            (_, Some(prev)) => Ok(prev.data.clone()),
             (Source::Path { path }, None) => std::fs::read(&path).map_err(|_| ()),
             (Source::Text { text }, None) => Ok(text.into_bytes()),
         };
-        let Ok(svg) = svg else {
+        let Ok(data) = data else {
             return (None, Outcome::failed(&id, "read_failed"));
         };
-        match svg2tgs_core::convert_grid(&svg, &options) {
-            Ok(out) => {
+        let svg = svg2tgs_trace::source_svg(&data, &options)
+            .map(|s| s.into_owned())
+            .unwrap_or_default();
+        match svg2tgs_trace::convert_any(&data, &options, options.preset.max_bytes()) {
+            Ok((out, trace)) => {
                 // Замечания клеток — без повторов.
                 let mut warnings: Vec<Warning> = Vec::new();
                 for w in out.tiles.iter().flat_map(|c| &c.warnings) {
@@ -127,8 +137,10 @@ async fn convert(
                     aspect: out.aspect,
                     warnings,
                     error: None,
+                    trace,
                 };
                 let item = Item {
+                    data,
                     svg,
                     options,
                     tiles: out.tiles.into_iter().map(|c| c.tgs).collect(),
@@ -137,12 +149,9 @@ async fn convert(
                 (Some(item), outcome)
             }
             Err(e) => {
-                let code = match e {
-                    svg2tgs_core::Error::InvalidSvg(_) => "invalid_svg",
-                    svg2tgs_core::Error::Empty => "empty",
-                    svg2tgs_core::Error::InvalidOption(_) => "invalid_option",
-                };
+                let code = e.code();
                 let item = Item {
+                    data,
                     svg,
                     options,
                     tiles: Vec::new(),
@@ -174,6 +183,7 @@ impl Outcome {
             aspect: 1.0,
             warnings: Vec::new(),
             error: Some(code.to_string()),
+            trace: None,
         }
     }
 }
@@ -533,7 +543,7 @@ async fn tg_publish(
                     ..item.options.clone()
                 };
                 let limit = svg2tgs_publish::rules::THUMB_TGS_MAX;
-                let out = svg2tgs_core::convert_grid_limited(&item.svg, &options, limit).ok()?;
+                let (out, _) = svg2tgs_trace::convert_any(&item.data, &options, limit).ok()?;
                 out.tiles.into_iter().nth(tile).map(|c| c.tgs)
             },
         )?;

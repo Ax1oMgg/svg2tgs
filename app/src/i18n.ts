@@ -89,6 +89,8 @@ const PARAMS = {
   setChDelete: ["n"],
   setConfirmTitle: ["n"],
   setDone: ["title", "n"],
+  traceAutoChosen: ["preset"],
+  traceSize: ["w", "h", "tw", "th"],
 } as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
 
 type Key = Exclude<keyof typeof ru, `_${string}`>;
@@ -157,6 +159,7 @@ export function warningText(w: Warning, lang: Lang): string {
   const values: Record<string, Arg> = { ...(p as Record<string, Arg>), filter };
   if (w.code === "size_over_limit") Object.assign(values, { size: kb(p.bytes), limit: kb(p.limit) });
   if (w.code === "duration_too_long") values.secs = (p.secs as number).toFixed(2);
+  if (w.code === "trace_preset_chosen") values.preset = (t[`tracePreset_${p.preset}`] as string | undefined) ?? String(p.preset);
   const text = fill(tpl, values);
   return w.element_id ? fill(t.warnElement as string, { text, id: w.element_id }) : text;
 }
@@ -179,7 +182,7 @@ export function tgErrorText(e: { code: string; [k: string]: unknown }, lang: Lan
 
 /** Важность замечания: справочное или предупреждение (как `Severity` в core). */
 export function isInfo(w: Warning): boolean {
-  if (w.code === "text_converted_to_paths") return true;
+  if (w.code === "text_converted_to_paths" || w.code === "trace_preset_chosen" || w.code === "gradients_applied") return true;
   if (w.code === "simplified") return (w.tolerance as number) < 0.5;
   return false;
 }

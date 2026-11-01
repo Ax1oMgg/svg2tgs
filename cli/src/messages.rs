@@ -55,10 +55,41 @@ pub fn warning(w: &Warning) -> String {
         WarningCode::DurationTooLong { secs, max } => {
             format!("длительность {secs:.2} с, а Telegram разрешает не больше {max:.0} с")
         }
+        WarningCode::TracePresetChosen { preset } => format!(
+            "картинка трассирована, пресет выбран сам: {}",
+            trace_preset(preset)
+        ),
+        WarningCode::PhotoPoster => {
+            "фото при лимите 64 КБ становится постером из пятен".to_string()
+        }
+        WarningCode::TraceReduced {
+            colors,
+            requested_colors,
+            details,
+            requested_details,
+        } => format!(
+            "чтобы уложиться в лимит, трассировка урезана: цветов {colors} из {requested_colors}, \
+             детали {details} из {requested_details}"
+        ),
+        WarningCode::GradientsApplied { count } => {
+            format!("плавные переходы переданы градиентом: {count}")
+        }
+        WarningCode::BackgroundNotFound => {
+            "фон не убран: углы картинки разного цвета или прозрачные".to_string()
+        }
     };
     match &w.element_id {
         Some(id) => format!("{text} (элемент «{id}»)"),
         None => text,
+    }
+}
+
+fn trace_preset(code: &str) -> &str {
+    match code {
+        "drawing" => "рисунок",
+        "pixel" => "пиксель-арт",
+        "photo" => "фото → постер",
+        other => other,
     }
 }
 
@@ -80,6 +111,9 @@ pub fn error(e: &Error) -> String {
         Error::InvalidSvg(_) => "файл повреждён или это не SVG".to_string(),
         Error::Empty => "в SVG нет ничего видимого".to_string(),
         Error::InvalidOption(what) => format!("некорректный параметр: {what}"),
+        Error::InvalidImage(_) => "картинка повреждена или это не PNG, JPEG, WebP".to_string(),
+        Error::AnimatedImage => "анимированные картинки не поддерживаются".to_string(),
+        Error::ImageTooLarge(w, h) => format!("картинка слишком большая: {w}×{h}"),
     }
 }
 

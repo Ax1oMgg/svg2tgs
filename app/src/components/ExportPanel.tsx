@@ -13,10 +13,16 @@ import {
   MAX_RADIUS,
   SECTION_KEYS,
   sameKeys,
+  stripExt,
   type Fit,
   type Options,
   type Outline,
   type SectionId,
+  type Trace,
+  type TraceInfo,
+  type TracePreset,
+  DEFAULT_TRACE,
+  TRACE_PARAMS,
 } from "../types";
 import { ColorRow, NumField, Range, ResetButton, Section, SliderField } from "./controls";
 import { SegButton } from "./Preview";
@@ -63,6 +69,10 @@ interface Props {
   web?: boolean;
   /** Открыть кадрирование мышью в превью. */
   onCrop: () => void;
+  /** Раздел «Трассировка»: есть ли картинки среди того, что правится. */
+  showTrace: boolean;
+  /** Что сделала трассировка выбранного файла (если это картинка). */
+  traceInfo: TraceInfo | null;
   /** Импорт и экспорт настроек («Дополнительно»). */
   onPasteSettings: () => void;
   onLoadSettings: () => void;
@@ -177,7 +187,7 @@ export function ExportPanel(p: Props) {
         : [AUTO_GRID_COLS, 1];
   const tiles = shownGrid[0] * shownGrid[1];
   const pad2 = (i: number) => String(i).padStart(Math.max(2, String(tiles).length), "0");
-  const base = (p.selectedName ?? "image").replace(/\.svg$/i, "");
+  const base = stripExt(p.selectedName ?? "image");
 
   const section = (id: SectionId, title: string, children: React.ReactNode) => (
     <Section
@@ -191,6 +201,16 @@ export function ExportPanel(p: Props) {
       {children}
     </Section>
   );
+
+  // Трассировка: пресет и его настройки; пустое — умолчание пресета.
+  const trace: Trace = options.trace ?? DEFAULT_TRACE;
+  const setTrace = (patch: Partial<Trace>) => set({ trace: { ...trace, ...patch } });
+  // Для «Авто» диапазоны и умолчания — выбранного у файла пресета.
+  const resolved = trace.preset === "auto" ? (p.traceInfo?.preset ?? "drawing") : trace.preset;
+  const tp = TRACE_PARAMS[resolved];
+  const colorsShown = Math.min(tp.colors[1], Math.max(tp.colors[0], trace.colors ?? tp.colors[2]));
+  const detailsShown = trace.details ?? tp.details;
+  const presets: TracePreset[] = ["auto", "drawing", "pixel", "photo"];
 
   const naming: [keyof Pick<ExportPrefs, "suffix" | "prefix" | "subfolder">, string][] = [
     ["suffix", t.suffix],
@@ -412,6 +432,81 @@ export function ExportPanel(p: Props) {
           </>
         )}
       </div>
+
+      {p.showTrace &&
+        section(
+          "trace",
+          t.traceSection,
+          <>
+            <div className="field">
+              <div className="field__label">{t.tracePreset}</div>
+              <div className="segmented segmented--wide segmented--tight" role="radiogroup" aria-label={t.tracePreset}>
+                {presets.map((preset) => (
+                  <SegButton
+                    key={preset}
+                    active={trace.preset === preset}
+                    title={t[`tracePresetHint_${preset}`]}
+                    // Смена способа сбрасывает его настройки на умолчания.
+                    onClick={() =>
+                      trace.preset !== preset && setTrace({ preset, colors: null, details: null, gradients: null })
+                    }
+                  >
+                    {t[`tracePreset_${preset}`]}
+                  </SegButton>
+                ))}
+              </div>
+              {trace.preset === "auto" && p.traceInfo && (
+                <p className="hint">{t.traceAutoChosen(t[`tracePreset_${p.traceInfo.preset}`])}</p>
+              )}
+            </div>
+            <SliderField
+              id="trace-colors"
+              label={t.traceColors}
+              unit=""
+              min={tp.colors[0]}
+              max={tp.colors[1]}
+              coarse={4}
+              value={colorsShown}
+              onChange={(v) => setTrace({ colors: Math.round(v) })}
+            />
+            <div className="field field--slider">
+              <div className="field__label">
+                <label htmlFor="trace-details">{t.traceDetails}</label>
+              </div>
+              <div className="range-scale" aria-hidden="true">
+                <span>{t.traceCoarser}</span>
+                <span>{t.traceFiner}</span>
+              </div>
+              <Range
+                id="trace-details"
+                value={detailsShown}
+                min={0}
+                max={100}
+                coarse={10}
+                label={t.traceDetails}
+                onChange={(v) => setTrace({ details: Math.round(v) })}
+              />
+            </div>
+            <label className="check" title={t.traceRemoveBgHint}>
+              <input type="checkbox" checked={!!trace.remove_bg} onChange={() => setTrace({ remove_bg: !trace.remove_bg })} />
+              {t.traceRemoveBg}
+            </label>
+            <label className="check" title={resolved === "pixel" ? t.traceGradientsPixel : t.traceGradientsHint}>
+              <input
+                type="checkbox"
+                disabled={resolved === "pixel"}
+                checked={resolved !== "pixel" && (trace.gradients ?? tp.gradients)}
+                onChange={() => setTrace({ gradients: !(trace.gradients ?? tp.gradients) })}
+              />
+              {t.traceGradients}
+            </label>
+            {p.traceInfo && (
+              <p className="hint hint--xs">
+                {t.traceSize(p.traceInfo.width, p.traceInfo.height, p.traceInfo.traced_width, p.traceInfo.traced_height)}
+              </p>
+            )}
+          </>,
+        )}
 
       {section(
         "position",

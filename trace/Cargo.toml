@@ -1,0 +1,17 @@
+[package]
+name = "svg2tgs-trace"
+description = "Трассировка растровых картинок (PNG, JPEG, WebP) в контуры для svg2tgs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+svg2tgs-core.workspace = true
+visioncortex = "0.9"
+png = "0.18"
+zune-jpeg = "0.5"
+zune-core = "0.5"
+image-webp = "0.2"

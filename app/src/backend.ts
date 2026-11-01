@@ -12,6 +12,10 @@ import * as web from "@web";
 import { version as appVersion } from "../package.json";
 import {
   DEFAULT_OPTIONS,
+  DEFAULT_TRACE,
+  TRACE_PARAMS,
+  isRaster,
+  type TraceInfo,
   type EditDone,
   type EditRequest,
   type Existing,
@@ -406,14 +410,14 @@ if (!isTauri() && !isWeb() && new URLSearchParams(location.search).has("tg")) {
   }
 }
 
-/** Системный диалог: выбрать SVG-файлы или папку. */
+/** Системный диалог: выбрать SVG и картинки или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
   if (isWeb()) return web.pickPaths(kind);
   if (!isTauri()) return [];
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open(
     kind === "files"
-      ? { multiple: true, filters: [{ name: "SVG", extensions: ["svg"] }] }
+      ? { multiple: true, filters: [{ name: "SVG, PNG, JPEG, WebP", extensions: ["svg", "png", "jpg", "jpeg", "webp"] }] }
       : { directory: true, multiple: false },
   );
   if (!picked) return [];
@@ -471,6 +475,8 @@ const SAMPLE_SVGS: Record<string, string> = {
   "rocket.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path fill="#3157d5" d="M32 4c10 8 14 20 12 34H20C18 24 22 12 32 4z"/><circle cx="32" cy="24" r="6" fill="#fff"/><path fill="#f08c2a" d="M24 40h16l-8 18z"/></svg>`,
   "shadow.svg": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="38" fill="#1e9e62"/><circle cx="38" cy="42" r="6" fill="#fff"/><circle cx="62" cy="42" r="6" fill="#fff"/></svg>`,
   "broken.svg": "не svg",
+  // Картинка: в браузерном режиме её изображает SVG с плавным переходом.
+  "sunset.png": `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff8a3d"/><stop offset="1" stop-color="#7b3fe4"/></linearGradient></defs><rect width="96" height="64" rx="10" fill="url(#g)"/><circle cx="48" cy="40" r="14" fill="#ffd34d"/></svg>`,
 };
 
 const mock = {
@@ -503,7 +509,35 @@ const mock = {
         : options.preset === "emoji" && text.includes("stroke-width")
           ? [{ code: "thin_lines_for_emoji", width: 8.5, recommended: 12 }]
           : [];
-    return { id, tgsBytes: 300 + text.length * 2, grid, aspect, warnings, error: null };
+    const name = source.kind === "path" ? source.path : "";
+    if (!isRaster(name)) return { id, tgsBytes: 300 + text.length * 2, grid, aspect, warnings, error: null };
+    // Картинка: «Авто» выбирает рисунок; переход — градиентом.
+    const tr = options.trace ?? DEFAULT_TRACE;
+    const preset = tr.preset === "auto" ? "drawing" : tr.preset;
+    const tp = TRACE_PARAMS[preset];
+    const gradients = preset !== "pixel" && (tr.gradients ?? tp.gradients);
+    const trace: TraceInfo = {
+      preset,
+      auto: tr.preset === "auto",
+      width: 960,
+      height: 640,
+      traced_width: 512,
+      traced_height: 341,
+      colors: tr.colors ?? tp.colors[2],
+      details: tr.details ?? tp.details,
+      colors_min: tp.colors[0],
+      colors_max: tp.colors[1],
+      gradients,
+      gradient_count: gradients ? 1 : 0,
+      block: 1,
+      background_removed: !!tr.remove_bg,
+    };
+    const notes = [
+      ...(trace.auto ? [{ code: "trace_preset_chosen", preset }] : []),
+      ...(preset === "photo" ? [{ code: "photo_poster" }] : []),
+      ...(gradients ? [{ code: "gradients_applied", count: 1 }] : []),
+    ];
+    return { id, tgsBytes: 2400 + trace.colors * 120, grid, aspect, warnings: notes, error: null, trace };
   },
 
   async preview(id: string): Promise<string | null> {

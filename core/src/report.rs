@@ -61,12 +61,31 @@ pub enum WarningCode {
     /// Для эмодзи: линии такой толщины (пиксели канваса 512) почти
     /// исчезнут при показе в строке текста.
     ThinLinesForEmoji { width: f32, recommended: f32 },
+    /// Растр трассирован; «Авто» выбрало пресет `preset`
+    /// (`drawing`, `pixel`, `photo`).
+    TracePresetChosen { preset: String },
+    /// Фото при лимите 64 КБ становится постером из пятен.
+    PhotoPoster,
+    /// Чтобы уложиться в лимит, трассировка урезана: цветов `colors`
+    /// вместо `requested_colors`, «Детали» `details` вместо `requested_details`.
+    TraceReduced {
+        colors: u32,
+        requested_colors: u32,
+        details: u32,
+        requested_details: u32,
+    },
+    /// Плавные переходы (`count`) переданы градиентом, а не полосами.
+    GradientsApplied { count: u32 },
+    /// «Убрать фон»: сплошного фона по углам картинки не нашлось.
+    BackgroundNotFound,
 }
 
 impl WarningCode {
     pub fn severity(&self) -> Severity {
         match self {
-            WarningCode::TextConvertedToPaths => Severity::Info,
+            WarningCode::TextConvertedToPaths
+            | WarningCode::TracePresetChosen { .. }
+            | WarningCode::GradientsApplied { .. } => Severity::Info,
             // Меньше полупикселя на канвасе 512 на глаз не видно.
             WarningCode::Simplified { tolerance } if *tolerance < 0.5 => Severity::Info,
             _ => Severity::Warning,

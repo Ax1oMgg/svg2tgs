@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { strings, tgErrorText } from "../i18n";
-import { THUMB_TGS_MAX, type FileItem, type PublishDone, type PublishProgress, type SetKind, type SetView, type TgError, type TgStatus } from "../types";
+import { THUMB_TGS_MAX, stripExt, type FileItem, type PublishDone, type PublishProgress, type SetKind, type SetView, type TgError, type TgStatus } from "../types";
 import { SegButton } from "./Preview";
 import { SetPicker, stemOf } from "./SetPicker";
 
@@ -43,7 +43,7 @@ type Mode = "new" | "append";
 /** Сколько помещается в набор (`rules::SetKind::capacity`). */
 const CAPACITY: Record<SetKind, number> = { stickers: 120, emoji: 200 };
 
-const base = (name: string) => name.replace(/\.svg$/i, "");
+const base = (name: string) => stripExt(name);
 const pad = (i: number) => String(i + 1).padStart(2, "0");
 
 /** Эмодзи из поля: по символам (графемам), пробелы и запятые — разделители. */

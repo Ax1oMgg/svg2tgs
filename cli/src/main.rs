@@ -1,6 +1,7 @@
 //! svg2tgs — командная строка.
 //!
-//! Конвертирует SVG-файлы и папки в .tgs и печатает замечания по-русски
+//! Конвертирует SVG-файлы, картинки (PNG, JPEG, WebP — через трассировку)
+//! и папки с ними в .tgs и печатает замечания по-русски
 //! или, с `--json`, отчёт для скриптов. Файлы обрабатываются параллельно,
 //! вывод — в порядке входных файлов.
 
@@ -16,24 +17,25 @@ use clap::parser::ValueSource;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use serde::Serialize;
 use svg2tgs_core::{
-    Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, Severity, Warning,
-    MAX_OUTLINE,
+    Background, Bounds, Crop, Fit, Grid, Optimization, Options, Outline, Preset, Severity, Trace,
+    TracePreset, Warning, MAX_DETAILS, MAX_OUTLINE,
 };
 
 #[derive(Parser, Debug)]
 #[command(
     name = "svg2tgs",
     version,
-    about = "Конвертация SVG в стикеры и эмодзи Telegram (TGS)",
+    about = "Конвертация SVG и картинок (PNG, JPEG, WebP) в стикеры и эмодзи Telegram (TGS)",
     after_help = "Примеры:\n  \
         svg2tgs icon.svg\n  \
+        svg2tgs logo.png --remove-bg\n  \
         svg2tgs ./svg -r -o ./tgs --preset emoji\n  \
         svg2tgs ./svg --json > report.json\n\n\
         Коды выхода: 0 — всё сконвертировано, 1 — нечего обрабатывать, 2 — часть файлов с ошибкой.\n\n\
         Выгрузка готовых .tgs в Telegram через своего бота: svg2tgs publish --help"
 )]
 struct Cli {
-    /// SVG-файлы или папки с ними.
+    /// SVG-файлы, картинки PNG, JPEG, WebP или папки с ними.
     #[arg(required = true)]
     inputs: Vec<PathBuf>,
 
@@ -45,7 +47,7 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = PresetArg::Sticker)]
     preset: PresetArg,
 
-    /// Искать SVG во вложенных папках.
+    /// Искать файлы во вложенных папках.
     #[arg(short, long)]
     recursive: bool,
 
@@ -145,9 +147,44 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
+    /// Трассировка картинок (PNG, JPEG, WebP): auto — выбрать по картинке,
+    /// drawing — рисунок или логотип, pixel — пиксель-арт, photo — фото → постер.
+    #[arg(long, value_enum, default_value_t = TraceArg::Auto)]
+    trace: TraceArg,
+
+    /// Трассировка: число цветов (по умолчанию — по пресету).
+    #[arg(long)]
+    colors: Option<u32>,
+
+    /// Трассировка: мелкие детали, 0 — крупнее, 100 — мельче
+    /// (по умолчанию — по пресету).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(0..=MAX_DETAILS as i64))]
+    details: Option<u32>,
+
+    /// Трассировка: сплошной фон по углам картинки сделать прозрачным.
+    #[arg(long)]
+    remove_bg: bool,
+
+    /// Трассировка: плавные переходы — полосами, без градиентов.
+    #[arg(long)]
+    no_gradients: bool,
+
+    /// Трассировка, отладка: пикселей трассировки на пиксель канваса 512
+    /// вместо значения пресета.
+    #[arg(long, value_name = "K")]
+    trace_scale: Option<f32>,
+
     /// Сколько файлов обрабатывать одновременно (по умолчанию — по числу ядер).
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum TraceArg {
+    Auto,
+    Drawing,
+    Pixel,
+    Photo,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -273,9 +310,13 @@ fn parse_optimize(s: &str) -> Result<Optimization, String> {
     }
 }
 
+/// SVG или картинка, которую можно трассировать.
 fn is_svg(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+    path.extension().is_some_and(|e| {
+        ["svg", "png", "jpg", "jpeg", "webp"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 fn collect_dir(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -360,8 +401,12 @@ struct Report {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tiles: Vec<String>,
     warnings: Vec<Warning>,
-    /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`, `write_failed`.
+    /// Код ошибки: `read_failed`, `invalid_svg`, `empty`, `invalid_option`,
+    /// `invalid_image`, `animated_image`, `image_too_large`, `write_failed`.
     error: Option<&'static str>,
+    /// Что сделала трассировка (только у картинок).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace: Option<svg2tgs_core::TraceInfo>,
     #[serde(skip)]
     error_text: Option<String>,
 }
@@ -376,6 +421,7 @@ fn process(src: &Path, dst: Option<&Path>, options: &Options, grid: Option<GridA
         warnings: Vec::new(),
         error: None,
         error_text: None,
+        trace: None,
     };
     let Some(dst) = dst else {
         report.status = "skipped";
@@ -398,14 +444,13 @@ fn process(src: &Path, dst: Option<&Path>, options: &Options, grid: Option<GridA
             options.grid_auto = true;
         }
     }
-    let tiles = match svg2tgs_core::convert_grid(&svg, &options) {
-        Ok(c) => c.tiles,
+    let tiles = match svg2tgs_trace::convert_any(&svg, &options, options.preset.max_bytes()) {
+        Ok((c, trace)) => {
+            report.trace = trace;
+            c.tiles
+        }
         Err(e) => {
-            report.error = Some(match e {
-                svg2tgs_core::Error::InvalidSvg(_) => "invalid_svg",
-                svg2tgs_core::Error::Empty => "empty",
-                svg2tgs_core::Error::InvalidOption(_) => "invalid_option",
-            });
+            report.error = Some(e.code());
             report.error_text = Some(messages::error(&e));
             return report;
         }
@@ -479,6 +524,29 @@ fn with_given_flags(mut base: Options, flags: Options, given: impl Fn(&str) -> b
         "optimize" => optimization;
         "fps" => fps;
         "duration" => duration_secs;
+    }
+    // Трассировка — по полям: флаг меняет только своё.
+    if given("trace") {
+        base.trace.preset = flags.trace.preset;
+        // Смена пресета сбрасывает его настройки на умолчания.
+        base.trace.colors = None;
+        base.trace.details = None;
+        base.trace.gradients = None;
+    }
+    if given("colors") {
+        base.trace.colors = flags.trace.colors;
+    }
+    if given("details") {
+        base.trace.details = flags.trace.details;
+    }
+    if given("remove_bg") {
+        base.trace.remove_bg = flags.trace.remove_bg;
+    }
+    if given("no_gradients") {
+        base.trace.gradients = flags.trace.gradients;
+    }
+    if given("trace_scale") {
+        base.trace.scale = flags.trace.scale;
     }
     base
 }
@@ -560,6 +628,19 @@ fn main() -> ExitCode {
         optimization: cli.optimize,
         fps: cli.fps,
         duration_secs: cli.duration,
+        trace: Trace {
+            preset: match cli.trace {
+                TraceArg::Auto => TracePreset::Auto,
+                TraceArg::Drawing => TracePreset::Drawing,
+                TraceArg::Pixel => TracePreset::Pixel,
+                TraceArg::Photo => TracePreset::Photo,
+            },
+            colors: cli.colors,
+            details: cli.details,
+            remove_bg: cli.remove_bg,
+            gradients: cli.no_gradients.then_some(false),
+            scale: cli.trace_scale,
+        },
         ..Options::default()
     };
     let options = match &cli.options {
@@ -583,7 +664,7 @@ fn main() -> ExitCode {
         }
     };
     if files.is_empty() {
-        eprintln!("SVG-файлы не найдены.");
+        eprintln!("SVG-файлы и картинки не найдены.");
         return ExitCode::from(1);
     }
     if let Err(e) = std::fs::create_dir_all(&cli.output) {

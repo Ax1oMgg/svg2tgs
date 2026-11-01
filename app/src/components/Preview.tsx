@@ -3,7 +3,7 @@ import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { errorText, isInfo, strings, warningText } from "../i18n";
 import type { PreviewBg, PreviewKind, PreviewMode } from "../prefs";
-import type { FileItem } from "../types";
+import { isRaster, type FileItem } from "../types";
 import { EMOJI_ONLY } from "../useFiles";
 import { formatSize } from "./FileList";
 
@@ -51,6 +51,7 @@ const clampView = (v: View): View => {
  * движком, что в Telegram.
  */
 export function Preview({ lang, web, item, kind, onKind, modified, mode, bg, onMode, onBg, cropEditor }: Props) {
+  const raster = !!item && isRaster(item.name);
   const t = strings[lang];
   const [images, setImages] = useState<{ svg: string | null; tgs: string | null }>({
     svg: null,
@@ -176,14 +177,14 @@ export function Preview({ lang, web, item, kind, onKind, modified, mode, bg, onM
                   {sliced ? (
                     <GridOverlay grid={grid} image={svgImg} />
                   ) : (
-                    <img src={svgImg} alt={modified ? t.originalModified : t.original} draggable={false} />
+                    <img src={svgImg} alt={(raster ? (modified ? t.originalImageModified : t.originalImage) : modified ? t.originalModified : t.original)} draggable={false} />
                   )}
                 </ZoomPane>
               ) : (
                 <Spinner />
               )}
               <figcaption>
-                {sliced ? t.sliceSource(grid[0], grid[1]) : modified ? t.originalModified : t.original}
+                {sliced ? t.sliceSource(grid[0], grid[1]) : (raster ? (modified ? t.originalImageModified : t.originalImage) : modified ? t.originalModified : t.original)}
               </figcaption>
             </figure>
             <figure className={`closeup__frame bg-${bg}`}>

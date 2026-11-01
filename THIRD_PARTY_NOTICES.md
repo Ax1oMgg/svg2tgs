@@ -46,6 +46,40 @@ License 1.1 — `web/fonts/OFL.txt`. Входит только в веб-вер�
 Превью результата в веб-версии — lottie-web (Airbnb), MIT,
 https://github.com/airbnb/lottie-web. Входит только в веб-версию.
 
+## VTracer и visioncortex — трассировка картинок
+
+Крейт `trace` (`trace/src/vectorize.rs`) содержит код, перенесённый
+из VTracer (https://github.com/visioncortex/vtracer, `converter.rs`
+и `svg.rs`, версия 0.6.4), лицензия MIT (VTracer — MIT OR Apache-2.0):
+
+> The MIT License (MIT)
+>
+> Copyright (c) 2023 Tsang Hao Fung
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.
+
+Сама кластеризация и подгонка кривых — библиотека visioncortex
+(https://github.com/visioncortex/visioncortex), MIT OR Apache-2.0,
+Copyright (c) Chris Tsang и авторы visioncortex. Чтение картинок — png
+(MIT / Apache-2.0), zune-jpeg (MIT / Apache-2.0 / Zlib), image-webp
+(MIT / Apache-2.0).
+
 ## Rust-библиотеки
 
 resvg, usvg, tiny-skia (MIT / Apache-2.0), Tauri (MIT / Apache-2.0),

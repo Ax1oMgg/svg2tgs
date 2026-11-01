@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::telegram;
+use crate::trace::Trace;
 
 /// Наибольшая толщина обводки, пиксели канваса.
 pub const MAX_OUTLINE: f32 = 64.0;
@@ -218,6 +219,8 @@ pub struct Options {
     /// Обводка вокруг рисунка; `None` — без обводки.
     pub outline: Option<Outline>,
     pub optimization: Optimization,
+    /// Трассировка растровой картинки (PNG, JPEG, WebP); для SVG не действует.
+    pub trace: Trace,
     /// Переопределения пресета (расширенные настройки).
     pub canvas_size: Option<u32>,
     pub fps: Option<u32>,
@@ -247,6 +250,7 @@ impl Default for Options {
             grid_auto: false,
             outline: None,
             optimization: Optimization::default(),
+            trace: Trace::default(),
             canvas_size: None,
             fps: None,
             duration_secs: None,
