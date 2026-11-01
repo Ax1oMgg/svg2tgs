@@ -262,6 +262,15 @@ export async function tgPublish(request: PublishRequest, onProgress: (p: Publish
   for (let done = start + 1; done <= total; done++) {
     await delay(120);
     if (tgMock.stop) throw { code: "stopped", done: done - 1 } as TgError;
+    // Демонстрация ограничения частоты: Telegram просит подождать перед 3-м.
+    if (done === Math.min(3, total) && !request.resume && base == null) {
+      for (let wait = 5; wait > 0; wait--) {
+        onProgress({ done: done - 1, total, wait });
+        await delay(1000);
+        if (tgMock.stop) throw { code: "stopped", done: done - 1 } as TgError;
+      }
+      onProgress({ done: done - 1, total, wait: null });
+    }
     // Демонстрация обрыва: на 24-м при первой попытке.
     if (done === 24 && !request.resume && base == null) throw { code: "network", done: 23, detail: "io" } as TgError;
     tgMock.sets.set(name, (base ?? 0) + done);

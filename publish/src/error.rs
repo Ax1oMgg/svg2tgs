@@ -20,6 +20,9 @@ pub enum Failure {
     /// Ответ не похож на ответ Bot API: HTTP-код и начало ответа.
     #[error("непонятный ответ: {0}")]
     Unexpected(String),
+    /// Прервано во время ожидания, о котором просил Telegram.
+    #[error("остановлено")]
+    Stopped,
 }
 
 /// Почему выгрузка не удалась.
@@ -101,6 +104,7 @@ impl PublishError {
     pub fn from_failure(f: Failure, done: usize) -> Self {
         match f {
             Failure::Network(detail) => Self::Network { done, detail },
+            Failure::Stopped => Self::Stopped { done },
             Failure::Unexpected(detail) => Self::Unexpected { detail },
             Failure::Api {
                 code: 401 | 404, ..

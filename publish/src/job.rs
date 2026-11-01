@@ -7,10 +7,11 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::api::{Bot, NewSticker, Transport};
+use crate::api::{Bot, NewSticker, Pause, Transport};
 use crate::error::{Failure, PublishError};
 use crate::rules::{self, SetKind};
 
@@ -54,6 +55,19 @@ pub struct Progress {
     /// Сколько стикеров уже в наборе.
     pub done: usize,
     pub total: usize,
+    /// Telegram попросил подождать (ответ 429): сколько секунд осталось
+    /// до повтора. Приходит каждую секунду ожидания; `None` — не ждём.
+    pub wait: Option<u64>,
+}
+
+impl Progress {
+    fn at(done: usize, total: usize) -> Self {
+        Self {
+            done,
+            total,
+            wait: None,
+        }
+    }
 }
 
 /// Итог.
@@ -105,15 +119,47 @@ fn read(item: &Item, index: usize) -> Result<Vec<u8>, PublishError> {
     }
 }
 
+/// Шаг ожидания: так часто проверяется «Остановить».
+const NAP: Duration = Duration::from_millis(250);
+
+/// Переждать `secs` секунд, о которых попросил Telegram, сообщая, сколько
+/// осталось. `false` — пользователь остановил выгрузку.
+fn wait_out<T: Transport>(
+    bot: &Bot<T>,
+    stop: &AtomicBool,
+    progress: &mut impl FnMut(Progress),
+    done: usize,
+    total: usize,
+    secs: u64,
+) -> bool {
+    let naps = (Duration::from_secs(1).as_millis() / NAP.as_millis()) as u64;
+    for left in (1..=secs).rev() {
+        progress(Progress {
+            done,
+            total,
+            wait: Some(left),
+        });
+        for _ in 0..naps {
+            if stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            bot.nap(NAP);
+        }
+    }
+    progress(Progress::at(done, total));
+    !stop.load(Ordering::Relaxed)
+}
+
 /// Загрузить файл; отказ Telegram с кодом 400 — это «файл не принят».
 fn upload<T: Transport>(
     bot: &Bot<T>,
     owner: i64,
     item: &Item,
     index: usize,
+    pause: Pause,
 ) -> Result<NewSticker, PublishError> {
     let bytes = read(item, index)?;
-    match bot.upload(owner, &item.filename, bytes) {
+    match bot.upload(owner, &item.filename, bytes, pause) {
         Ok(file_id) => Ok(NewSticker {
             file_id,
             emoji: item.emoji.clone(),
@@ -130,8 +176,10 @@ fn upload<T: Transport>(
     }
 }
 
-/// Выгрузить задание. `progress` вызывается после каждого стикера,
-/// `stop` проверяется перед каждым следующим файлом.
+/// Выгрузить задание. `progress` вызывается после каждого стикера
+/// и каждую секунду ожидания, если Telegram попросил подождать.
+/// `stop` проверяется перед каждым файлом и во время ожидания; запрос,
+/// который уже ушёл, дожидается ответа.
 pub fn run<T: Transport>(
     bot: &Bot<T>,
     bot_username: &str,
@@ -170,10 +218,7 @@ pub fn run<T: Transport>(
             });
         }
         if already > 0 {
-            progress(Progress {
-                done: already,
-                total,
-            });
+            progress(Progress::at(already, total));
         }
         (already, already)
     } else {
@@ -191,20 +236,18 @@ pub fn run<T: Transport>(
                 })
             }
             Some(set) => {
-                progress(Progress {
-                    done: set.count,
-                    total,
-                });
+                progress(Progress::at(set.count, total));
                 (set.count, set.count)
             }
             None => {
                 if stop.load(Ordering::Relaxed) {
                     return Err(PublishError::Stopped { done: 0 });
                 }
-                let first = upload(bot, owner, &job.items[0], 0)?;
-                bot.create_set(owner, &job.name, &job.title, job.kind, &[first])
+                let mut pause = |s| wait_out(bot, stop, &mut progress, 0, total, s);
+                let first = upload(bot, owner, &job.items[0], 0, &mut pause)?;
+                bot.create_set(owner, &job.name, &job.title, job.kind, &[first], &mut pause)
                     .map_err(|f| create_error(f, &job.name))?;
-                progress(Progress { done: 1, total });
+                progress(Progress::at(1, total));
                 (1, 0)
             }
         }
@@ -213,13 +256,11 @@ pub fn run<T: Transport>(
         if stop.load(Ordering::Relaxed) {
             return Err(PublishError::Stopped { done: index });
         }
-        let sticker = upload(bot, owner, &job.items[index], index)?;
-        bot.add_sticker(owner, &job.name, &sticker)
+        let mut pause = |s| wait_out(bot, stop, &mut progress, index, total, s);
+        let sticker = upload(bot, owner, &job.items[index], index, &mut pause)?;
+        bot.add_sticker(owner, &job.name, &sticker, &mut pause)
             .map_err(|f| PublishError::from_failure(f, index))?;
-        progress(Progress {
-            done: index + 1,
-            total,
-        });
+        progress(Progress::at(index + 1, total));
     }
     Ok(Done {
         name: job.name.clone(),
