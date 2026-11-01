@@ -396,6 +396,8 @@ async fn export_options_file(
 enum Link {
     Project,
     Issues,
+    /// Страница последнего выпуска (установщики).
+    Releases,
     Telegram,
     Email,
     /// @BotFather — подсказка, где создать бота для выгрузки.
@@ -409,6 +411,7 @@ fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
     let url = match link {
         Link::Project => "https://github.com/Ax1oMgg/svg2tgs",
         Link::Issues => "https://github.com/Ax1oMgg/svg2tgs/issues",
+        Link::Releases => "https://github.com/Ax1oMgg/svg2tgs/releases/latest",
         Link::Telegram => "https://t.me/chajnaya_Axioma",
         Link::Email => "mailto:chajnayaaxioma@gmail.com",
         Link::Botfather => "https://t.me/BotFather",

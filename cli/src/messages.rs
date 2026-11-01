@@ -25,6 +25,12 @@ pub fn warning(w: &Warning) -> String {
             *limit as f64 / 1024.0
         ),
         WarningCode::TextDropped => "текст пропущен: не найден подходящий шрифт".to_string(),
+        WarningCode::FontReplaced { family, used } => {
+            format!("шрифта «{family}» нет — текст нарисован шрифтом «{used}» и выглядит иначе")
+        }
+        WarningCode::GlyphsMissing { chars } => {
+            format!("знаков нет ни в одном шрифте, они не нарисованы: {chars}")
+        }
         WarningCode::ClipApproximated => {
             "сложная вложенная обрезка передана приближённо".to_string()
         }

@@ -34,6 +34,18 @@ Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part
 of Feather (MIT). All other copyright (c) for Lucide are held by Lucide
 Contributors 2022.
 
+## Шрифт Noto Sans — веб-версия
+
+`web/fonts/NotoSans-Regular.ttf` — подмножество Noto Sans (латиница,
+греческий, кириллица). Copyright 2022 The Noto Project Authors
+(https://github.com/notofonts/latin-greek-cyrillic), SIL Open Font
+License 1.1 — `web/fonts/OFL.txt`. Входит только в веб-версию.
+
+## lottie-web — веб-версия
+
+Превью результата в веб-версии — lottie-web (Airbnb), MIT,
+https://github.com/airbnb/lottie-web. Входит только в веб-версию.
+
 ## Rust-библиотеки
 
 resvg, usvg, tiny-skia (MIT / Apache-2.0), Tauri (MIT / Apache-2.0),

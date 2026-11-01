@@ -4031,6 +4031,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "svg2tgs-web"
+version = "0.2.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "svg2tgs-core",
+ "svg2tgs-render",
+]
+
+[[package]]
 name = "svgtypes"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

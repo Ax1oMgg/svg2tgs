@@ -113,33 +113,8 @@ pub struct Saved {
     pub count: usize,
 }
 
-/// Имя файла без запрещённых в Windows и macOS символов.
-fn safe_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    let trimmed = cleaned.trim().trim_end_matches('.').to_string();
-    if trimmed.is_empty() {
-        "sticker".into()
-    } else {
-        trimmed
-    }
-}
-
-/// Имена файлов результата без расширения: `base` или, при нарезке на
-/// `n` клеток, `base_01`, `base_02`… (номер с нулями до общей длины).
-pub fn tile_names(base: &str, n: usize) -> Vec<String> {
-    if n <= 1 {
-        return vec![base.to_string()];
-    }
-    let digits = n.to_string().len().max(2);
-    (1..=n).map(|i| format!("{base}_{i:0digits$}")).collect()
-}
+use svg2tgs_core::naming::safe_file_name as safe_name;
+pub use svg2tgs_core::naming::tile_names;
 
 /// Есть ли в папке хоть один из файлов результата.
 fn taken(dir: &Path, base: &str, n: usize) -> bool {
@@ -350,13 +325,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(nowhere.folder(), None);
-    }
-
-    #[test]
-    fn unsafe_names_are_cleaned() {
-        assert_eq!(safe_name("a/b:c?"), "a_b_c_");
-        assert_eq!(safe_name("  ..."), "sticker");
-        assert_eq!(safe_name("иконка"), "иконка");
     }
 
     #[test]

@@ -10,6 +10,8 @@ import appIcon from "../../app-icon.svg";
 
 interface Props {
   lang: Lang;
+  /** Веб-версия: выгрузка в Telegram недоступна. */
+  web?: boolean;
   theme: Theme;
   version: string;
   /** Выгрузка в Telegram. Переключатель применяется «Готово», как язык
@@ -25,7 +27,7 @@ interface Props {
  * Выбор применяется только кнопкой «Готово» — она активна, когда что-то
  * изменено. «×», Esc и щелчок мимо окна закрывают его без изменений.
  */
-export function SettingsDialog({ lang, theme, version, tg, onTg, onApply, onClose }: Props) {
+export function SettingsDialog({ lang, web, theme, version, tg, onTg, onApply, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const [draftLang, setDraftLang] = useState(lang);
   const [draftTheme, setDraftTheme] = useState(theme);
@@ -90,7 +92,7 @@ export function SettingsDialog({ lang, theme, version, tg, onTg, onApply, onClos
         </div>
       </div>
 
-      <TelegramSection lang={lang} on={draftTg} onToggle={setDraftTg} status={tg} onStatus={onTg} />
+      <TelegramSection lang={lang} web={web} on={draftTg} onToggle={setDraftTg} status={tg} onStatus={onTg} />
 
       <section className="about" aria-label={t.about}>
         <h3>{t.about}</h3>
@@ -140,12 +142,15 @@ const OWNER_POLL_MS = 3000;
  */
 function TelegramSection({
   lang,
+  web,
   on,
   onToggle,
   status,
   onStatus,
 }: {
   lang: Lang;
+  /** Веб-версия: выгрузки нет, переключатель выключен с объяснением. */
+  web?: boolean;
   /** Переключатель в окне (ещё не сохранён). */
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -204,12 +209,14 @@ function TelegramSection({
           className="switch"
           aria-checked={on}
           aria-labelledby="tg-title"
+          disabled={web}
+          title={web ? t.webTelegramOff : undefined}
           onClick={() => onToggle(!on)}
         >
           <span className="switch__knob" />
         </button>
       </div>
-      <p className="tg__lead">{on ? t.tgLeadOn : t.tgLeadOff}</p>
+      <p className="tg__lead">{web ? t.webTelegramOff : on ? t.tgLeadOn : t.tgLeadOff}</p>
 
       {on && !status.bot && (
         <div className="tg__form">

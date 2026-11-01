@@ -20,3 +20,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Веб-версия: модуль ядра собирается `npm run wasm`, сайт — `npm run build:web`
+app/src/web/wasm/
+app/dist-web/

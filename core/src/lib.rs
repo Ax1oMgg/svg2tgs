@@ -12,6 +12,7 @@ mod clip;
 mod convert;
 mod geometry;
 mod lottie;
+pub mod naming;
 mod options;
 mod placement;
 mod report;
@@ -59,17 +60,52 @@ pub enum Error {
     InvalidOption(String),
 }
 
-/// Системные шрифты загружаются один раз за время работы программы:
-/// они нужны, чтобы перевести `<text>` в кривые.
-fn fontdb() -> Arc<usvg::fontdb::Database> {
-    static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
-    DB.get_or_init(|| {
+/// Шрифты, которыми ядро переводит `<text>` в кривые.
+struct Fonts {
+    db: Arc<usvg::fontdb::Database>,
+    /// Шрифты встроены сборкой (веб-версия): любой текст рисуется ими,
+    /// поэтому замена общих семейств (`sans-serif` и т. п.) тоже замечание.
+    embedded: bool,
+}
+
+/// Шрифты вместо системных, если их задала сборка ([`use_embedded_fonts`]).
+static EMBEDDED_FONTS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+static FONTS: OnceLock<Fonts> = OnceLock::new();
+
+/// Шрифты для сборок без доступа к системе (веб-версия): текст переводится
+/// в кривые только ими, системные не ищутся. Общие семейства (`sans-serif`
+/// и т. д.) ведут к первому из них. Вызывать до первой конвертации;
+/// `false` — шрифты уже загружены и замена не действует.
+pub fn use_embedded_fonts(fonts: Vec<Vec<u8>>) -> bool {
+    if FONTS.get().is_some() {
+        return false;
+    }
+    EMBEDDED_FONTS.set(fonts).is_ok()
+}
+
+/// Шрифты загружаются один раз за время работы программы: системные
+/// или встроенные сборкой.
+fn fonts() -> &'static Fonts {
+    FONTS.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
-        db.load_system_fonts();
+        let embedded = match EMBEDDED_FONTS.get() {
+            Some(list) => {
+                for data in list {
+                    db.load_font_data(data.clone());
+                }
+                true
+            }
+            None => {
+                db.load_system_fonts();
+                false
+            }
+        };
         map_generic_families(&mut db);
-        Arc::new(db)
+        Fonts {
+            db: Arc::new(db),
+            embedded,
+        }
     })
-    .clone()
 }
 
 /// Предпочтения для общих семейств CSS (`sans-serif` и т. д.) — первое
@@ -132,35 +168,123 @@ fn map_generic_families(db: &mut usvg::fontdb::Database) {
 
 /// Разбирает SVG в нормализованное дерево usvg с системными шрифтами.
 pub fn parse_svg(svg: &[u8]) -> Result<usvg::Tree, Error> {
-    parse_with(svg, fontdb()).map(|(tree, _)| tree)
+    parse_with(svg, fonts()).map(|(tree, _)| tree)
 }
 
-/// Разбор с заданной базой шрифтов. Второе значение — был ли текст, для
-/// которого не нашлось ни одного шрифта: usvg такой текст выбрасывает из
-/// дерева, и без этого флага он пропадал бы без замечания.
-fn parse_with(
-    svg: &[u8],
-    fontdb: Arc<usvg::fontdb::Database>,
-) -> Result<(usvg::Tree, bool), Error> {
-    let text_lost = std::sync::atomic::AtomicBool::new(false);
+/// Что случилось с текстом при разборе: usvg молча выбрасывает текст без
+/// шрифта и знаки без начертания — без этих сведений потеря была бы не видна.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct TextNotes {
+    /// Был текст, для которого не нашлось ни одного шрифта.
+    lost: bool,
+    /// Замены шрифта: (что просил SVG, чем нарисовано), без повторов.
+    replaced: Vec<(String, String)>,
+    /// Знаки, которых нет ни в одном шрифте, без повторов. usvg спрашивает
+    /// замену для первого такого знака в строке текста — остальные знаки
+    /// той строки сюда могут не попасть.
+    missing: Vec<char>,
+}
+
+/// Сколько недостающих знаков перечислять в замечании.
+const MAX_MISSING_CHARS: usize = 8;
+
+impl TextNotes {
+    fn warnings(&self) -> Vec<Warning> {
+        let mut out = Vec::new();
+        if self.lost {
+            out.push(Warning {
+                code: WarningCode::TextDropped,
+                element_id: None,
+            });
+        }
+        for (family, used) in &self.replaced {
+            out.push(Warning {
+                code: WarningCode::FontReplaced {
+                    family: family.clone(),
+                    used: used.clone(),
+                },
+                element_id: None,
+            });
+        }
+        if !self.missing.is_empty() {
+            out.push(Warning {
+                code: WarningCode::GlyphsMissing {
+                    chars: self.missing.iter().take(MAX_MISSING_CHARS).collect(),
+                },
+                element_id: None,
+            });
+        }
+        out
+    }
+}
+
+/// Название семейства, как его пишут в CSS.
+fn family_name(f: &usvg::FontFamily) -> String {
+    match f {
+        usvg::FontFamily::Named(name) => name.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Разбор с заданными шрифтами; второе значение — что случилось с текстом.
+fn parse_with(svg: &[u8], fonts: &Fonts) -> Result<(usvg::Tree, TextNotes), Error> {
+    let notes = std::sync::Mutex::new(TextNotes::default());
+    let embedded = fonts.embedded;
     let default_select = usvg::FontResolver::default_font_selector();
+    let default_fallback = usvg::FontResolver::default_fallback_selector();
     let usvg_options = usvg::Options {
-        fontdb,
+        fontdb: fonts.db.clone(),
         font_resolver: usvg::FontResolver {
             select_font: Box::new(|font, db| {
                 let found = default_select(font, db);
-                if found.is_none() {
-                    text_lost.store(true, std::sync::atomic::Ordering::Relaxed);
+                let mut notes = notes.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(id) = found else {
+                    notes.lost = true;
+                    return None;
+                };
+                // Замена — если нарисовано не тем семейством, что названо в
+                // SVG. Общие семейства в системе ведут к привычным шрифтам
+                // и заменой не считаются; во встроенных шрифтах — считаются.
+                let used = db
+                    .face(id)
+                    .and_then(|f| f.families.first())
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default();
+                let named: Vec<&String> = font
+                    .families()
+                    .iter()
+                    .filter_map(|f| match f {
+                        usvg::FontFamily::Named(n) => Some(n),
+                        _ => None,
+                    })
+                    .collect();
+                let matches_named = named.iter().any(|n| n.eq_ignore_ascii_case(&used));
+                if !matches_named && (embedded || !named.is_empty()) {
+                    let family = font.families().first().map(family_name).unwrap_or_default();
+                    let pair = (family, used);
+                    if !notes.replaced.contains(&pair) {
+                        notes.replaced.push(pair);
+                    }
                 }
                 found
             }),
-            select_fallback: usvg::FontResolver::default_fallback_selector(),
+            select_fallback: Box::new(|c, exclude, db| {
+                let found = default_fallback(c, exclude, db);
+                if found.is_none() && !c.is_whitespace() && !c.is_control() {
+                    let mut notes = notes.lock().unwrap_or_else(|e| e.into_inner());
+                    if !notes.missing.contains(&c) {
+                        notes.missing.push(c);
+                    }
+                }
+                found
+            }),
         },
         ..usvg::Options::default()
     };
     let tree =
         usvg::Tree::from_data(svg, &usvg_options).map_err(|e| Error::InvalidSvg(e.to_string()))?;
-    Ok((tree, text_lost.load(std::sync::atomic::Ordering::Relaxed)))
+    drop(usvg_options);
+    Ok((tree, notes.into_inner().unwrap_or_else(|e| e.into_inner())))
 }
 
 /// Ступени автоподгонки под лимит размера: (знаков после запятой,
@@ -214,7 +338,7 @@ pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
         Some(o) if options.outline_width() > 0.0 => Some(parse_color(&o.color, "обводки")?),
         _ => None,
     };
-    let (tree, text_lost) = parse_with(svg, fontdb())?;
+    let (tree, text_notes) = parse_with(svg, fonts())?;
     let mut options = options.clone();
     if options.grid.is_some() && options.grid_auto {
         options.grid = Some(auto_grid(&tree, &options, Grid::AUTO_COLS));
@@ -246,7 +370,7 @@ pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
             }
             let (step, tolerance, built) = result.expect("в лестнице есть хотя бы одна ступень");
             drawn |= !built.empty;
-            out.push(finish(built, options, step, tolerance, text_lost, limit));
+            out.push(finish(built, options, step, tolerance, &text_notes, limit));
         }
     }
     if !drawn {
@@ -265,16 +389,15 @@ fn finish(
     options: &Options,
     step: usize,
     tolerance: f64,
-    text_lost: bool,
+    text_notes: &TextNotes,
     limit: usize,
 ) -> Conversion {
     let mut warnings = telegram::check_options(options);
     warnings.extend(built.warnings);
-    if text_lost && !warnings.iter().any(|w| w.code == WarningCode::TextDropped) {
-        warnings.push(Warning {
-            code: WarningCode::TextDropped,
-            element_id: None,
-        });
+    for w in text_notes.warnings() {
+        if !warnings.iter().any(|x| x.code == w.code) {
+            warnings.push(w);
+        }
     }
     if step > 0 {
         warnings.push(Warning {
@@ -786,10 +909,37 @@ mod tests {
 
     const TEXT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="10" y="30" font-family="sans-serif">OK</text></svg>"#;
 
+    /// Встроенный шрифт веб-версии — он же для проверок замен.
+    const NOTO: &[u8] = include_bytes!("../../web/fonts/NotoSans-Regular.ttf");
+
+    fn embedded_fonts() -> Fonts {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_font_data(NOTO.to_vec());
+        map_generic_families(&mut db);
+        Fonts {
+            db: Arc::new(db),
+            embedded: true,
+        }
+    }
+
+    fn text_svg(family: &str, text: &str) -> Vec<u8> {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="10" y="30" font-family="{family}">{text}</text></svg>"#
+        )
+        .into_bytes()
+    }
+
     #[test]
     fn text_without_any_font_is_reported() {
-        let (_, lost) = parse_with(TEXT_SVG, Arc::new(usvg::fontdb::Database::new())).unwrap();
-        assert!(lost, "без шрифтов текст пропадает — это должно быть видно");
+        let empty = Fonts {
+            db: Arc::new(usvg::fontdb::Database::new()),
+            embedded: false,
+        };
+        let (_, notes) = parse_with(TEXT_SVG, &empty).unwrap();
+        assert!(
+            notes.lost,
+            "без шрифтов текст пропадает — это должно быть видно"
+        );
     }
 
     #[test]
@@ -800,9 +950,79 @@ mod tests {
             return; // в системе нет шрифтов — проверять нечего
         }
         map_generic_families(&mut db);
-        let (tree, lost) = parse_with(TEXT_SVG, Arc::new(db)).unwrap();
-        assert!(!lost);
+        let fonts = Fonts {
+            db: Arc::new(db),
+            embedded: false,
+        };
+        let (tree, notes) = parse_with(TEXT_SVG, &fonts).unwrap();
+        assert!(!notes.lost);
+        // Общее семейство в системе ведёт к привычному шрифту — не замена.
+        assert!(notes.replaced.is_empty(), "{:?}", notes.replaced);
         assert!(tree.root().has_children(), "текст должен остаться в дереве");
+    }
+
+    #[test]
+    fn embedded_font_reports_every_replacement() {
+        let fonts = embedded_fonts();
+        // Общее семейство во встроенных шрифтах — тоже замена.
+        let (tree, notes) = parse_with(TEXT_SVG, &fonts).unwrap();
+        assert!(tree.root().has_children());
+        assert_eq!(
+            notes.replaced,
+            vec![("sans-serif".into(), "Noto Sans".into())]
+        );
+        // Названный шрифт, которого нет.
+        let (_, notes) = parse_with(&text_svg("Comic Sans MS, cursive", "Hi"), &fonts).unwrap();
+        assert_eq!(
+            notes.replaced,
+            vec![("Comic Sans MS".into(), "Noto Sans".into())]
+        );
+        // Сам встроенный шрифт — не замена.
+        let (_, notes) = parse_with(&text_svg("Noto Sans", "Hi"), &fonts).unwrap();
+        assert!(notes.replaced.is_empty());
+    }
+
+    #[test]
+    fn missing_glyphs_are_listed_once() {
+        let fonts = embedded_fonts();
+        // Кириллица в шрифте есть, иероглифов — нет. usvg спрашивает замену
+        // для первого недостающего знака строки — он и попадает в замечание.
+        let (_, notes) = parse_with(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="10" y="20" font-family="Noto Sans">Привет 你好</text><text x="10" y="40" font-family="Noto Sans">ok 你 ok</text></svg>"#
+                .as_bytes(),
+            &fonts,
+        )
+        .unwrap();
+        assert_eq!(notes.missing, vec!['你']);
+        assert!(!notes.lost);
+        let w = notes.warnings();
+        assert!(w.iter().any(|w| w.code
+            == WarningCode::GlyphsMissing {
+                chars: "你".into()
+            }));
+        // Без недостающих знаков замечания нет.
+        let (_, notes) = parse_with(&text_svg("Noto Sans", "Ёлка Ωmega ß"), &fonts).unwrap();
+        assert!(notes.missing.is_empty(), "{:?}", notes.missing);
+    }
+
+    #[test]
+    fn font_notes_reach_the_conversion_warnings() {
+        let fonts = embedded_fonts();
+        let (_, notes) = parse_with(&text_svg("Arial", "OK"), &fonts).unwrap();
+        let codes: Vec<String> = notes
+            .warnings()
+            .iter()
+            .map(|w| {
+                serde_json::to_value(w).unwrap()["code"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(codes, ["font_replaced"]);
+        let json = serde_json::to_value(&notes.warnings()[0]).unwrap();
+        assert_eq!(json["family"], "Arial");
+        assert_eq!(json["used"], "Noto Sans");
     }
 
     #[test]

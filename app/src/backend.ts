@@ -1,12 +1,15 @@
 /**
  * Мост к Rust-части приложения.
  *
- * Внутри Tauri вызовы идут в команды из `src-tauri`. В обычном браузере
- * (`npm run dev` без Tauri) подставляются тестовые данные — так интерфейс
- * можно открыть отдельно, например для сверки с макетом.
+ * Внутри Tauri вызовы идут в команды из `src-tauri`. В веб-версии
+ * (`--mode web`) — в ядро в WebAssembly (`web/client.ts`). В обычном
+ * браузере (`npm run dev` без Tauri) подставляются тестовые данные — так
+ * интерфейс можно открыть отдельно, например для сверки с макетом.
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import * as web from "@web";
+import { version as appVersion } from "../package.json";
 import {
   DEFAULT_OPTIONS,
   type Existing,
@@ -29,8 +32,9 @@ import {
 export interface AppInfo {
   version: string;
   coreVersion: string;
-  /** "tauri" — настоящее приложение, "browser" — режим с тестовыми данными. */
-  runtime: "tauri" | "browser";
+  /** "tauri" — установленная программа, "web" — веб-версия,
+   *  "browser" — режим с тестовыми данными. */
+  runtime: "tauri" | "web" | "browser";
 }
 
 export interface Entry {
@@ -39,8 +43,11 @@ export interface Entry {
 }
 
 export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
+/** Веб-версия: сборка `--mode web` (ядро в WebAssembly, сайт на GitHub Pages). */
+export const isWeb = (): boolean => import.meta.env.VITE_TARGET === "web";
 
 export async function getAppInfo(): Promise<AppInfo> {
+  if (isWeb()) return { version: appVersion, coreVersion: await web.coreVersion(), runtime: "web" };
   if (!isTauri()) {
     return { version: "0.2.0", coreVersion: "0.2.0", runtime: "browser" };
   }
@@ -53,28 +60,33 @@ export async function startupPaths(): Promise<string[]> {
 }
 
 export async function expandPaths(paths: string[], recursive: boolean): Promise<Entry[]> {
+  if (isWeb()) return web.expandPaths(paths, recursive);
   return isTauri() ? invoke<Entry[]>("expand_paths", { paths, recursive }) : [];
 }
 
 export async function convert(id: string, source: Source, options: Options): Promise<Outcome> {
   if (isTauri()) return invoke<Outcome>("convert", { id, source, options });
+  if (isWeb()) return web.convert(id, source, options);
   return mock.convert(id, source, options);
 }
 
 /** Картинка превью (data-URL PNG) или `null`. */
 export async function preview(id: string, kind: "svg" | "tgs" | "source", size: number): Promise<string | null> {
   if (isTauri()) return invoke<string | null>("preview", { id, kind, size });
+  if (isWeb()) return web.preview(id, kind, size);
   return mock.preview(id);
 }
 
 export async function forget(ids: string[]): Promise<void> {
   if (isTauri()) await invoke("forget", { ids });
+  else if (isWeb()) await web.forget(ids);
   else ids.forEach((id) => mock.svgs.delete(id));
 }
 
 /** Размер рисунка: ширина и высота области просмотра SVG. */
 export async function sourceSize(id: string): Promise<[number, number] | null> {
   if (isTauri()) return invoke<[number, number] | null>("source_size", { id });
+  if (isWeb()) return web.sourceSize(id);
   const svg = mock.svgs.get(id);
   const vb = svg?.match(/viewBox="[\d.\s-]*?([\d.]+)\s+([\d.]+)"/);
   return vb ? [Number(vb[1]), Number(vb[2])] : null;
@@ -83,6 +95,7 @@ export async function sourceSize(id: string): Promise<[number, number] | null> {
 /** Какие результаты лягут на уже существующие файлы. */
 export async function findExisting(requests: SaveRequest[]): Promise<Existing[]> {
   if (isTauri()) return invoke<Existing[]>("find_existing", { requests });
+  if (isWeb()) return web.findExisting(requests);
   // Браузерный режим: «уже есть» первый файл — чтобы показать окно.
   const r = requests[0];
   return r ? [{ id: r.id, fileName: `${r.name}.tgs`, path: `/demo/${r.name}.tgs`, suggested: `${r.name}_1` }] : [];
@@ -91,6 +104,7 @@ export async function findExisting(requests: SaveRequest[]): Promise<Existing[]>
 /** Сохраняет готовые TGS; совпадения без `overwrite` получают номер. */
 export async function save(requests: SaveRequest[]): Promise<Saved[]> {
   if (isTauri()) return invoke<Saved[]>("save", { requests, conflict: "number" });
+  if (isWeb()) return web.save(requests);
   return requests.map((r) => {
     const dir = r.dir ?? (r.source ? r.source.replace(/[\\/][^\\/]*$/, "") : null);
     if (!dir) return { id: r.id, status: "failed", path: null, count: 0 };
@@ -99,6 +113,12 @@ export async function save(requests: SaveRequest[]): Promise<Saved[]> {
     const name = n > 1 ? `${r.name}_01` : r.name;
     return { id: r.id, status: "saved", path: `${dir}${sub}/${name}.tgs`, count: n };
   });
+}
+
+/** Начало экспорта — сразу по нажатию: веб-версия спрашивает здесь доступ
+ *  к выбранной папке (браузер разрешает спросить только по действию). */
+export async function prepareExport(): Promise<void> {
+  if (isWeb()) await web.prepareExport();
 }
 
 export async function openFolder(path: string): Promise<void> {
@@ -116,6 +136,7 @@ export async function parseOptions(text: string): Promise<ParsedOptions | Option
       return e as OptionsError;
     }
   }
+  if (isWeb()) return web.parseOptions(text);
   // Браузерный режим: как в ядре — объект, неизвестные поля пропускаются.
   try {
     const v = JSON.parse(text);
@@ -131,6 +152,7 @@ export async function parseOptions(text: string): Promise<ParsedOptions | Option
 /** Настройки текстом — для копирования. */
 export async function optionsJson(options: Options): Promise<string> {
   if (isTauri()) return invoke<string>("options_json", { options });
+  if (isWeb()) return web.optionsJson(options);
   return JSON.stringify({ format: "svg2tgs-options/1", ...options }, null, 2);
 }
 
@@ -158,12 +180,13 @@ export async function exportOptionsFile(options: Options, name: string): Promise
   return true;
 }
 
-export type Link = "project" | "issues" | "telegram" | "email" | "botfather";
+export type Link = "project" | "issues" | "releases" | "telegram" | "email" | "botfather";
 
 /** Адреса ссылок «О программе» (в Rust они же — белый список). */
 export const LINKS: Record<Link, string> = {
   project: "https://github.com/Ax1oMgg/svg2tgs",
   issues: "https://github.com/Ax1oMgg/svg2tgs/issues",
+  releases: "https://github.com/Ax1oMgg/svg2tgs/releases/latest",
   telegram: "https://t.me/chajnaya_Axioma",
   email: "mailto:chajnayaaxioma@gmail.com",
   botfather: "https://t.me/BotFather",
@@ -311,6 +334,7 @@ const tgMock = {
 
 /** Системный диалог: выбрать SVG-файлы или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
+  if (isWeb()) return web.pickPaths(kind);
   if (!isTauri()) return [];
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open(
@@ -324,6 +348,7 @@ export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {
 
 /** Системный диалог: выбрать папку для экспорта. */
 export async function pickFolder(defaultPath?: string, title?: string): Promise<string | null> {
+  if (isWeb()) return web.pickFolder();
   if (!isTauri()) return defaultPath ?? "C:\\Users\\demo\\Documents\\stickers";
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({ directory: true, multiple: false, defaultPath, title });
@@ -335,6 +360,7 @@ export async function onFileDrop(handlers: {
   over: (active: boolean) => void;
   drop: (paths: string[]) => void;
 }): Promise<() => void> {
+  if (isWeb()) return web.onFileDrop(handlers);
   if (!isTauri()) return () => {};
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   return getCurrentWebview().onDragDropEvent((event) => {
@@ -346,6 +372,19 @@ export async function onFileDrop(handlers: {
       handlers.drop(p.paths);
     }
   });
+}
+
+/** Можно ли выбрать папку экспорта (в веб-версии — только Chrome и Edge). */
+export const canPickFolder = (): boolean => !isWeb() || web.canPickFolder();
+
+/** Веб-версия: вернуть папку экспорта из прошлого раза; `false` — её нет. */
+export async function restoreFolder(name: string): Promise<boolean> {
+  return isWeb() ? web.restoreFolder(name) : true;
+}
+
+/** Папку экспорта убрали («рядом с исходником» / скачивание). */
+export function clearFolder(): void {
+  if (isWeb()) web.clearFolder();
 }
 
 /* ------------------------------------------------------------------------- */

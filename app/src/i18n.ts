@@ -74,6 +74,7 @@ const PARAMS = {
   pubFoundNoRoom: ["title", "count", "free", "n"],
   pubGoAppend: ["n"],
   pubDoneAppend: ["n", "title"],
+  webFontToast: ["name"],
 } as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
 
 type Key = Exclude<keyof typeof ru, `_${string}`>;

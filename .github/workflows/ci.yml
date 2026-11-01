@@ -63,6 +63,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Веб-версия: ядро в WebAssembly и сайт (выкладывает pages.yml).
+      - name: Веб-версия
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: app
+        run: |
+          rustup target add wasm32-unknown-unknown
+          npm run build:web 2>&1 | tee -a ../ci.log; exit ${PIPESTATUS[0]}
+
       - name: Формат
         if: runner.os == 'Linux'
         shell: bash
