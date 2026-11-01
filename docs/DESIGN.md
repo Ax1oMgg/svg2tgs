@@ -34,6 +34,8 @@
 | SettingsPanel (панель экспорта) | `app/src/components/ExportPanel.tsx` |
 | EmptyState | `app/src/components/EmptyState.tsx` |
 | SettingsDialog | `app/src/components/SettingsDialog.tsx` |
+| PublishDialog | `app/src/components/PublishDialog.tsx` (выбор набора — `SetPicker.tsx`) |
+| SetDialog (набор в Telegram) | `app/src/components/SetDialog.tsx` |
 | Buttons | классы `.btn--*` в `app/src/App.css` |
 | Экраны (каркас, затемнение под диалогом) | `app/src/App.tsx`, `app/src/App.css` |
 

@@ -1,9 +1,10 @@
 //! Правила Telegram для наборов, которые создаёт бот.
 //!
-//! Источник — Bot API, методы `createNewStickerSet`, `addStickerToSet`
-//! и объект `InputSticker` (<https://core.telegram.org/bots/api#stickers>);
-//! сверено 01.11.2026 по тексту документации, который повторяют
-//! библиотеки teloxide-core и telers. Значения закреплены тестами ниже.
+//! Источник — Bot API, методы `createNewStickerSet`, `addStickerToSet`,
+//! `setStickerSetThumbnail` и объект `InputSticker`
+//! (<https://core.telegram.org/bots/api#stickers>); сверено 01.11.2026
+//! по тексту документации, который повторяют библиотеки teloxide-core
+//! (0.13) и telers. Значения закреплены тестами ниже.
 
 /// Самое длинное имя набора (`name`), символов.
 pub const NAME_MAX: usize = 64;
@@ -17,6 +18,10 @@ pub const EMOJI_MAX: usize = 20;
 pub const STICKERS_PER_SET: usize = 120;
 /// Предел набора эмодзи.
 pub const EMOJI_PER_SET: usize = 200;
+/// Обложка набора стикеров в формате TGS — не больше 32 КБ
+/// (`setStickerSetThumbnail`). У набора эмодзи обложка — один из его эмодзи
+/// (`setCustomEmojiStickerSetThumbnail`), отдельного файла нет.
+pub const THUMB_TGS_MAX: usize = 32 * 1024;
 
 /// Что создаём: набор стикеров или набор эмодзи.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -167,6 +172,7 @@ mod tests {
         assert_eq!(TITLE_MAX, 64);
         assert_eq!(INITIAL_MAX, 50);
         assert_eq!(EMOJI_MAX, 20);
+        assert_eq!(THUMB_TGS_MAX, 32 * 1024);
         assert_eq!(SetKind::Stickers.capacity(), 120);
         assert_eq!(SetKind::Emoji.capacity(), 200);
         assert_eq!(SetKind::Stickers.api_type(), "regular");

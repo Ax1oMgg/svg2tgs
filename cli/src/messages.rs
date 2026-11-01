@@ -134,5 +134,15 @@ pub fn publish_error(e: &svg2tgs_publish::PublishError) -> String {
         E::ReadFailed { index, detail } => {
             format!("не удалось прочитать файл №{}: {detail}", index + 1)
         }
+        E::SetChanged { name } => format!(
+            "набор «{name}» изменился с тех пор, как его открыли — откройте его заново"
+        ),
+        E::ThumbTooBig { bytes, max } => format!(
+            "обложка {} КБ, а Telegram принимает до {} КБ — выберите файл поменьше",
+            bytes.div_ceil(1024),
+            max / 1024
+        ),
+        E::CoverInvalid => "обложка не подходит: у набора стикеров — номер файла или свой .tgs, у набора эмодзи — только номер файла".into(),
+        E::DeleteAll => "нельзя удалить все стикеры: пустой набор Telegram не хранит".into(),
     }
 }

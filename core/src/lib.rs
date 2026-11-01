@@ -334,6 +334,17 @@ pub fn convert(svg: &[u8], options: &Options) -> Result<Conversion, Error> {
 /// на клетку, по строкам слева направо. Без сетки — один файл. Пустые
 /// клетки тоже возвращаются (прозрачные), чтобы сетка не съехала.
 pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
+    convert_grid_limited(svg, options, options.preset.max_bytes())
+}
+
+/// Как [`convert_grid`], но с другим пределом размера файла: автоподгонка
+/// упрощает рисунок, пока каждый файл не станет не больше `max_bytes`.
+/// Нужно для обложки набора стикеров (Telegram принимает TGS до 32 КБ).
+pub fn convert_grid_limited(
+    svg: &[u8],
+    options: &Options,
+    max_bytes: usize,
+) -> Result<Tiles, Error> {
     let outline_rgb = match &options.outline {
         Some(o) if options.outline_width() > 0.0 => Some(parse_color(&o.color, "обводки")?),
         _ => None,
@@ -352,7 +363,7 @@ pub fn convert_grid(svg: &[u8], options: &Options) -> Result<Tiles, Error> {
         Optimization::Lossless => vec![(3, 0.0)],
         Optimization::Manual(n) => vec![(n.min(6), 0.05)],
     };
-    let limit = options.preset.max_bytes();
+    let limit = max_bytes;
 
     let mut out = Vec::new();
     let mut drawn = false;

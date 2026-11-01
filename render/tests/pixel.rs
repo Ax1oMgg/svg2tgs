@@ -479,3 +479,39 @@ fn content_bounds_follow_rotation() {
     let c = render_tgs(&convert(svg, &boxed).unwrap().tgs, SIZE, 0).unwrap();
     assert!(compare(&a, &c).bad_ratio > MAX_BAD);
 }
+
+/// Обложка набора стикеров (TGS до 32 КБ): рисунок, ужатый под меньший
+/// предел, по-прежнему похож на исходник (размер обложки — 100 px).
+#[test]
+fn cover_under_smaller_limit_still_matches() {
+    // Круги из сотен точек: обычный результат больше 32 КБ.
+    let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">"#);
+    for row in 0..8 {
+        for col in 0..8 {
+            let (cx, cy) = (32.0 + col as f64 * 64.0, 32.0 + row as f64 * 64.0);
+            let mut d = String::new();
+            for k in 0..240 {
+                let a = k as f64 / 240.0 * std::f64::consts::TAU;
+                let r = 26.0 + 0.04 * ((k * 7 + row + col) % 3) as f64;
+                let p = if k == 0 { "M" } else { "L" };
+                d += &format!("{p}{:.3} {:.3}", cx + r * a.cos(), cy + r * a.sin());
+            }
+            let fill = if (row + col) % 2 == 0 {
+                "#2f81f7"
+            } else {
+                "#e5534b"
+            };
+            svg += &format!(r#"<path fill="{fill}" d="{d}Z"/>"#);
+        }
+    }
+    svg += "</svg>";
+    let options = Options::default();
+    let usual = convert(svg.as_bytes(), &options).unwrap();
+    assert!(usual.tgs_bytes() > 32 * 1024, "{}", usual.tgs_bytes());
+    let tiles = svg2tgs_core::convert_grid_limited(svg.as_bytes(), &options, 32 * 1024).unwrap();
+    let cover = &tiles.tiles[0];
+    assert!(cover.tgs_bytes() <= 32 * 1024, "{}", cover.tgs_bytes());
+    let reference = render_svg(svg.as_bytes(), 100, &options).unwrap();
+    let result = render_tgs(&cover.tgs, 100, 0).unwrap();
+    assert_close("cover", &reference, &result);
+}

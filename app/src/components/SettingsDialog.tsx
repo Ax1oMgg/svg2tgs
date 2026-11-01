@@ -18,6 +18,8 @@ interface Props {
    *  и тема; подключение бота (токен, /start) — сразу, это действия. */
   tg: TgStatus;
   onTg: (s: TgStatus) => void;
+  /** Открыть окно «Набор в Telegram». */
+  onEditSets: () => void;
   onApply: (lang: Lang, theme: Theme, tgEnabled: boolean) => void;
   onClose: () => void;
 }
@@ -27,7 +29,7 @@ interface Props {
  * Выбор применяется только кнопкой «Готово» — она активна, когда что-то
  * изменено. «×», Esc и щелчок мимо окна закрывают его без изменений.
  */
-export function SettingsDialog({ lang, web, theme, version, tg, onTg, onApply, onClose }: Props) {
+export function SettingsDialog({ lang, web, theme, version, tg, onTg, onEditSets, onApply, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const [draftLang, setDraftLang] = useState(lang);
   const [draftTheme, setDraftTheme] = useState(theme);
@@ -92,7 +94,7 @@ export function SettingsDialog({ lang, web, theme, version, tg, onTg, onApply, o
         </div>
       </div>
 
-      <TelegramSection lang={lang} web={web} on={draftTg} onToggle={setDraftTg} status={tg} onStatus={onTg} />
+      <TelegramSection lang={lang} web={web} on={draftTg} onToggle={setDraftTg} status={tg} onStatus={onTg} onEditSets={onEditSets} />
 
       <section className="about" aria-label={t.about}>
         <h3>{t.about}</h3>
@@ -147,6 +149,7 @@ function TelegramSection({
   onToggle,
   status,
   onStatus,
+  onEditSets,
 }: {
   lang: Lang;
   /** Веб-версия: выгрузки нет, переключатель выключен с объяснением. */
@@ -156,6 +159,7 @@ function TelegramSection({
   onToggle: (on: boolean) => void;
   status: TgStatus;
   onStatus: (s: TgStatus) => void;
+  onEditSets: () => void;
 }) {
   const t = strings[lang];
   const [token, setToken] = useState("");
@@ -280,6 +284,12 @@ function TelegramSection({
             {t.tgOwner("")}
             <span className="tg__strong">{status.owner}</span>
           </span>
+          {/* Править наборы — когда выгрузка уже включена «Готово» (сеть разрешена). */}
+          {status.enabled && (
+            <button type="button" className="btn btn--default" title={t.tgSetsHint} onClick={onEditSets}>
+              {t.tgSets}
+            </button>
+          )}
           <button type="button" className="btn btn--text" title={t.tgDisconnectHint} onClick={() => void disconnect()}>
             {t.tgDisconnect}
           </button>

@@ -75,6 +75,17 @@ const PARAMS = {
   pubGoAppend: ["n"],
   pubDoneAppend: ["n", "title"],
   webFontToast: ["name"],
+  pubSetLabel: ["title", "stem"],
+  pubCoverIs: ["name"],
+  pubCoverFailed: ["error"],
+  setPictures: ["done", "total"],
+  setSticker: ["n"],
+  setCoverTooBig: ["kb"],
+  setChanges: ["list"],
+  setChEmoji: ["n"],
+  setChDelete: ["n"],
+  setConfirmTitle: ["n"],
+  setDone: ["title", "n"],
 } as const satisfies Partial<Record<keyof typeof ru, readonly string[]>>;
 
 type Key = Exclude<keyof typeof ru, `_${string}`>;

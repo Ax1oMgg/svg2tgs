@@ -47,6 +47,20 @@ pub struct Job {
     /// попытки. Всё, что сверх этого, — уже дописанные файлы задания
     /// (так продолжение после обрыва не повторяет их). `None` — новый набор.
     pub append: Option<usize>,
+    /// Обложка набора; `None` — не менять (у нового набора Telegram берёт
+    /// первый стикер).
+    pub cover: Option<Cover>,
+}
+
+/// Обложка набора при выгрузке.
+#[derive(Clone, Debug)]
+pub enum Cover {
+    /// Стикер задания с этим номером (с 0). У набора эмодзи — его эмодзи,
+    /// у набора стикеров — его файл (если он не больше
+    /// [`rules::THUMB_TGS_MAX`]).
+    Item(usize),
+    /// Отдельный файл TGS — только для набора стикеров.
+    Tgs(Vec<u8>),
 }
 
 /// Ход выгрузки.
@@ -61,7 +75,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    fn at(done: usize, total: usize) -> Self {
+    pub(crate) fn at(done: usize, total: usize) -> Self {
         Self {
             done,
             total,
@@ -78,6 +92,8 @@ pub struct Done {
     pub count: usize,
     /// С какого стикера продолжили (0 — набор создан заново).
     pub resumed_from: usize,
+    /// Стикеры выгружены, а обложку Telegram не принял: почему.
+    pub cover_error: Option<PublishError>,
 }
 
 /// Проверка задания до любых запросов к Telegram.
@@ -101,10 +117,41 @@ pub fn validate(job: &Job, bot_username: &str) -> Result<(), PublishError> {
         });
     }
     for (index, item) in job.items.iter().enumerate() {
-        let n = item.emoji.len();
-        if n == 0 || n > rules::EMOJI_MAX || item.emoji.iter().any(|e| e.trim().is_empty()) {
+        if !emoji_is_valid(&item.emoji) {
             return Err(PublishError::EmojiInvalid { index });
         }
+    }
+    match (&job.cover, job.kind) {
+        (None, _) => {}
+        (Some(Cover::Item(i)), _) if *i >= job.items.len() => {
+            return Err(PublishError::CoverInvalid)
+        }
+        (Some(Cover::Item(i)), SetKind::Stickers) => {
+            if let Source::Bytes(b) = &job.items[*i].source {
+                check_thumb(b)?;
+            }
+        }
+        (Some(Cover::Item(_)), SetKind::Emoji) => {}
+        (Some(Cover::Tgs(b)), SetKind::Stickers) => check_thumb(b)?,
+        (Some(Cover::Tgs(_)), SetKind::Emoji) => return Err(PublishError::CoverInvalid),
+    }
+    Ok(())
+}
+
+/// 1–20 непустых эмодзи.
+pub(crate) fn emoji_is_valid(emoji: &[String]) -> bool {
+    !emoji.is_empty()
+        && emoji.len() <= rules::EMOJI_MAX
+        && emoji.iter().all(|e| !e.trim().is_empty())
+}
+
+/// Обложка набора стикеров — TGS не больше [`rules::THUMB_TGS_MAX`].
+pub(crate) fn check_thumb(tgs: &[u8]) -> Result<(), PublishError> {
+    if tgs.len() > rules::THUMB_TGS_MAX {
+        return Err(PublishError::ThumbTooBig {
+            bytes: tgs.len(),
+            max: rules::THUMB_TGS_MAX,
+        });
     }
     Ok(())
 }
@@ -124,10 +171,10 @@ const NAP: Duration = Duration::from_millis(250);
 
 /// Переждать `secs` секунд, о которых попросил Telegram, сообщая, сколько
 /// осталось. `false` — пользователь остановил выгрузку.
-fn wait_out<T: Transport>(
+pub(crate) fn wait_out<T: Transport>(
     bot: &Bot<T>,
     stop: &AtomicBool,
-    progress: &mut impl FnMut(Progress),
+    progress: &mut dyn FnMut(Progress),
     done: usize,
     total: usize,
     secs: u64,
@@ -262,12 +309,52 @@ pub fn run<T: Transport>(
             .map_err(|f| PublishError::from_failure(f, index))?;
         progress(Progress::at(index + 1, total));
     }
+    // Обложка — после всех стикеров: её отказ не отменяет выгрузку.
+    let cover_error = job.cover.as_ref().and_then(|cover| {
+        let mut pause = |s| wait_out(bot, stop, &mut progress, total, total, s);
+        set_cover(bot, owner, job, cover, &mut pause).err()
+    });
     Ok(Done {
         name: job.name.clone(),
         link: job.kind.link(&job.name),
         count: total,
         resumed_from,
+        cover_error,
     })
+}
+
+/// Поставить обложку из задания.
+fn set_cover<T: Transport>(
+    bot: &Bot<T>,
+    owner: i64,
+    job: &Job,
+    cover: &Cover,
+    pause: Pause,
+) -> Result<(), PublishError> {
+    let fail = |f| PublishError::from_failure(f, job.items.len());
+    match (cover, job.kind) {
+        (Cover::Item(i), SetKind::Emoji) => {
+            // Место стикера в наборе: дописанные идут после тех, что были.
+            let at = job.append.unwrap_or(0) + i;
+            let set = bot.get_set(&job.name).map_err(fail)?;
+            let id = set
+                .and_then(|s| s.stickers.get(at).and_then(|st| st.custom_emoji_id.clone()))
+                .ok_or(PublishError::CoverInvalid)?;
+            bot.set_emoji_thumbnail(&job.name, &id, pause).map_err(fail)
+        }
+        (Cover::Item(i), SetKind::Stickers) => {
+            let bytes = read(&job.items[*i], *i)?;
+            check_thumb(&bytes)?;
+            bot.set_sticker_thumbnail(owner, &job.name, bytes, pause)
+                .map_err(fail)
+        }
+        (Cover::Tgs(bytes), SetKind::Stickers) => {
+            check_thumb(bytes)?;
+            bot.set_sticker_thumbnail(owner, &job.name, bytes.clone(), pause)
+                .map_err(fail)
+        }
+        (Cover::Tgs(_), SetKind::Emoji) => Err(PublishError::CoverInvalid),
+    }
 }
 
 /// Отказ `createNewStickerSet`: имя занято или неверно — отдельными кодами.

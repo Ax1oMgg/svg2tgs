@@ -3970,7 +3970,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svg2tgs-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "keyring",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "svg2tgs-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "serde",
@@ -3998,7 +3998,7 @@ dependencies = [
 
 [[package]]
 name = "svg2tgs-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
  "i_overlay",
@@ -4010,7 +4010,7 @@ dependencies = [
 
 [[package]]
 name = "svg2tgs-publish"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4020,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "svg2tgs-render"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cc",
  "flate2",
@@ -4032,7 +4032,7 @@ dependencies = [
 
 [[package]]
 name = "svg2tgs-web"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
  "serde",

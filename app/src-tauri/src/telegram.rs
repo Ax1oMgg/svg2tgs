@@ -5,13 +5,15 @@
 //! `telegram.json` и без него до транспорта не доходит. Токен бота —
 //! в системном хранилище паролей, в файлах его нет.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use svg2tgs_publish::{
-    rules, Bot, HttpTransport, Item, Job, Owner, PublishError, SetKind, Source, Transport,
+    rules, Bot, Cover, Edit, EditCover, HttpTransport, Item, Job, Owner, PublishError, SetKind,
+    Source, StickerInfo, Transport,
 };
 
 /// Что программа помнит о выгрузке (без токена).
@@ -118,13 +120,14 @@ pub struct Status {
     pub sets: Vec<KnownSet>,
 }
 
-/// Набор в Telegram — для «Дописать».
+/// Набор в Telegram — для «Дописать» и окна «Набор».
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SetView {
     pub name: String,
     pub title: String,
     pub count: usize,
     pub kind: Option<SetKind>,
+    pub stickers: Vec<StickerInfo>,
 }
 
 pub struct Telegram {
@@ -133,6 +136,21 @@ pub struct Telegram {
     store: Box<dyn TokenStore>,
     /// «Остановить» во время выгрузки.
     pub stop: Arc<AtomicBool>,
+    /// Скачанные стикеры наборов (`file_id` → TGS): превью в окне «Набор»
+    /// и обложка из стикера. Только в памяти.
+    files: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+/// Сколько скачанных стикеров держать в памяти (два полных набора эмодзи).
+const FILES_CACHED: usize = 400;
+
+/// `file_id` из ответа Telegram: латиница, цифры, `-` и `_`.
+fn file_id_is_valid(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 256
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn owner_label(o: &Owner) -> String {
@@ -156,6 +174,7 @@ impl Telegram {
             path,
             store,
             stop: Arc::new(AtomicBool::new(false)),
+            files: Mutex::new(HashMap::new()),
         }
     }
 
@@ -277,7 +296,33 @@ impl Telegram {
             title: set.title,
             count: set.count,
             kind: set.kind,
+            stickers: set.stickers,
         })
+    }
+
+    /// Файл стикера (TGS) по `file_id`: из памяти или скачать
+    /// (`getFile` и загрузка с `api.telegram.org`).
+    pub fn sticker_file<T: Transport>(
+        &self,
+        file_id: &str,
+        make: impl FnOnce(&str) -> T,
+    ) -> Result<Vec<u8>, TgError> {
+        if !file_id_is_valid(file_id) {
+            return Err(PublishError::CoverInvalid.into());
+        }
+        if let Some(b) = self.files.lock().unwrap().get(file_id) {
+            return Ok(b.clone());
+        }
+        let bytes = self
+            .bot_with(Access::Saved, None, make)?
+            .download_sticker(file_id)
+            .map_err(|f| PublishError::from_failure(f, 0))?;
+        let mut files = self.files.lock().unwrap();
+        if files.len() >= FILES_CACHED {
+            files.clear();
+        }
+        files.insert(file_id.to_string(), bytes.clone());
+        Ok(bytes)
     }
 
     /// Начало адреса из названия.
@@ -336,6 +381,101 @@ pub struct PublishRequest {
     #[serde(default)]
     pub append_base: Option<usize>,
     pub items: Vec<PublishItem>,
+    /// Обложка — стикер задания с этим номером (с 0); `None` — не менять.
+    #[serde(default)]
+    pub cover: Option<usize>,
+}
+
+/// Задание для `publish` из запроса и готовых TGS. `tgs(id, tile)` — файл
+/// клетки; `cover_tgs(id, tile)` — та же клетка, ужатая до предела обложки
+/// (нужна, только если обычный файл больше 32 КБ).
+pub fn build_job_with_cover(
+    req: &PublishRequest,
+    bot: &str,
+    tgs: impl Fn(&str, usize) -> Option<Vec<u8>>,
+    cover_tgs: impl Fn(&str, usize) -> Option<Vec<u8>>,
+) -> Result<Job, TgError> {
+    let mut job = build_job(req, bot, &tgs)?;
+    job.cover = match (req.cover, req.kind) {
+        (None, _) => None,
+        (Some(i), _) if i >= req.items.len() => return Err(PublishError::CoverInvalid.into()),
+        (Some(i), SetKind::Emoji) => Some(Cover::Item(i)),
+        (Some(i), SetKind::Stickers) => {
+            let small = match &job.items[i].source {
+                Source::Bytes(b) => b.len() <= rules::THUMB_TGS_MAX,
+                Source::Path(_) => false,
+            };
+            if small {
+                Some(Cover::Item(i))
+            } else {
+                let it = &req.items[i];
+                let bytes = cover_tgs(&it.id, it.tile.unwrap_or(0))
+                    .ok_or(TgError::NotConverted { index: i })?;
+                Some(Cover::Tgs(bytes))
+            }
+        }
+    };
+    Ok(job)
+}
+
+/// Стикер, у которого меняются эмодзи.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmojiChange {
+    pub file_id: String,
+    pub emoji: Vec<String>,
+}
+
+/// Правка набора из окна «Набор».
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditRequest {
+    /// Полное имя набора.
+    pub name: String,
+    pub kind: SetKind,
+    /// Стикеры (`file_id`) в порядке, в каком набор был открыт.
+    pub seen: Vec<String>,
+    #[serde(default)]
+    pub delete: Vec<String>,
+    /// Оставшиеся — в нужном порядке.
+    pub order: Vec<String>,
+    #[serde(default)]
+    pub emoji: Vec<EmojiChange>,
+    /// Обложка — стикер набора; `None` — не менять.
+    #[serde(default)]
+    pub cover: Option<String>,
+}
+
+/// Правка для `publish`. У набора стикеров обложка — файл стикера
+/// (`file(file_id)`), он должен быть не больше 32 КБ.
+pub fn build_edit(
+    req: &EditRequest,
+    bot: &str,
+    file: impl FnOnce(&str) -> Result<Vec<u8>, TgError>,
+) -> Result<Edit, TgError> {
+    if !rules::name_is_valid(&req.name, bot) {
+        return Err(PublishError::NameInvalid {
+            name: req.name.clone(),
+        }
+        .into());
+    }
+    let cover = match (&req.cover, req.kind) {
+        (None, _) => None,
+        (Some(id), SetKind::Emoji) => Some(EditCover::Sticker(id.clone())),
+        (Some(id), SetKind::Stickers) => Some(EditCover::Tgs(file(id)?)),
+    };
+    Ok(Edit {
+        name: req.name.clone(),
+        seen: req.seen.clone(),
+        delete: req.delete.clone(),
+        order: req.order.clone(),
+        emoji: req
+            .emoji
+            .iter()
+            .map(|e| (e.file_id.clone(), e.emoji.clone()))
+            .collect(),
+        cover,
+    })
 }
 
 /// Задание для `publish` из запроса и готовых TGS (`tgs(id, tile)`).
@@ -364,6 +504,7 @@ pub fn build_job(
         items,
         resume: req.resume,
         append: req.append_base,
+        cover: None,
     })
 }
 
@@ -555,6 +696,7 @@ mod tests {
             stem: "serdechki".into(),
             resume: false,
             append_base: None,
+            cover: None,
             items: vec![
                 PublishItem {
                     id: "a".into(),
@@ -579,6 +721,99 @@ mod tests {
         assert_eq!(job.title, "Сердечки");
         assert_eq!(job.items[0].filename, "heart_02.tgs");
         assert!(matches!(&job.items[0].source, Source::Bytes(b) if b == &vec![1]));
+    }
+
+    fn request(kind: SetKind, cover: Option<usize>) -> PublishRequest {
+        PublishRequest {
+            kind,
+            title: "Т".into(),
+            stem: "t".into(),
+            resume: false,
+            append_base: None,
+            cover,
+            items: (0..2)
+                .map(|i| PublishItem {
+                    id: format!("{i}"),
+                    tile: None,
+                    name: format!("f{i}"),
+                    emoji: vec!["⭐".into()],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn cover_for_stickers_is_shrunk_only_when_too_big() {
+        let small = |_: &str, _: usize| Some(vec![1; 100]);
+        let big = |_: &str, _: usize| Some(vec![1; 40 * 1024]);
+        let shrunk = |_: &str, _: usize| Some(vec![2; 30 * 1024]);
+        let job =
+            build_job_with_cover(&request(SetKind::Stickers, Some(1)), "b", small, shrunk).unwrap();
+        assert!(matches!(job.cover, Some(Cover::Item(1))));
+        let job =
+            build_job_with_cover(&request(SetKind::Stickers, Some(1)), "b", big, shrunk).unwrap();
+        assert!(matches!(&job.cover, Some(Cover::Tgs(b)) if b.len() == 30 * 1024));
+        let job =
+            build_job_with_cover(&request(SetKind::Emoji, Some(0)), "b", big, shrunk).unwrap();
+        assert!(matches!(job.cover, Some(Cover::Item(0))));
+        assert_eq!(
+            build_job_with_cover(&request(SetKind::Emoji, Some(2)), "b", big, shrunk).unwrap_err(),
+            TgError::Publish(PublishError::CoverInvalid)
+        );
+    }
+
+    #[test]
+    fn edit_takes_cover_file_only_for_stickers() {
+        let req = EditRequest {
+            name: "a_by_tea_stickers_bot".into(),
+            kind: SetKind::Stickers,
+            seen: vec!["x".into(), "y".into()],
+            delete: vec![],
+            order: vec!["y".into(), "x".into()],
+            emoji: vec![EmojiChange {
+                file_id: "x".into(),
+                emoji: vec!["🔥".into()],
+            }],
+            cover: Some("y".into()),
+        };
+        let edit = build_edit(&req, "tea_stickers_bot", |id| {
+            assert_eq!(id, "y");
+            Ok(vec![7])
+        })
+        .unwrap();
+        assert_eq!(edit.cover, Some(EditCover::Tgs(vec![7])));
+        assert_eq!(edit.emoji, vec![("x".into(), vec!["🔥".to_string()])]);
+        let emoji = EditRequest {
+            kind: SetKind::Emoji,
+            ..req.clone()
+        };
+        let edit = build_edit(&emoji, "tea_stickers_bot", |_| panic!("не нужен файл")).unwrap();
+        assert_eq!(edit.cover, Some(EditCover::Sticker("y".into())));
+        let foreign = EditRequest {
+            name: "a_by_other_bot".into(),
+            ..req
+        };
+        assert!(matches!(
+            build_edit(&foreign, "tea_stickers_bot", |_| Ok(vec![])),
+            Err(TgError::Publish(PublishError::NameInvalid { .. }))
+        ));
+    }
+
+    #[test]
+    fn sticker_files_need_enabled_publishing_and_valid_ids() {
+        let t = tg();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        assert_eq!(
+            t.sticker_file("abc", |_| Counting(c)),
+            Err(TgError::Disabled)
+        );
+        let c = calls.clone();
+        assert_eq!(
+            t.sticker_file("../x", |_| Counting(c)),
+            Err(TgError::Publish(PublishError::CoverInvalid))
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]

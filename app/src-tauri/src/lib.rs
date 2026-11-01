@@ -423,7 +423,7 @@ fn open_link(link: Link, app: tauri::AppHandle) -> Result<(), String> {
 
 /* ------------------------------ Выгрузка в Telegram ----------------------------- */
 
-use telegram::{Access, KnownSet, PublishRequest, SetView, Status, Telegram, TgError};
+use telegram::{Access, EditRequest, KnownSet, PublishRequest, SetView, Status, Telegram, TgError};
 
 /// Ошибка фонового потока — как «прочий отказ».
 fn join_error(e: impl ToString) -> TgError {
@@ -519,9 +519,24 @@ async fn tg_publish(
             .clone()
             .ok_or(TgError::Publish(svg2tgs_publish::PublishError::NoOwner))?;
         let items = app.state::<AppState>().items.lock().unwrap().clone();
-        let job = telegram::build_job(&request, &bot_name, |id, tile| {
-            items.get(id).and_then(|i| i.tiles.get(tile).cloned())
-        })?;
+        let job = telegram::build_job_with_cover(
+            &request,
+            &bot_name,
+            |id, tile| items.get(id).and_then(|i| i.tiles.get(tile).cloned()),
+            // Обложка набора стикеров больше 32 КБ — та же клетка, ужатая
+            // под предел обложки.
+            |id, tile| {
+                let item = items.get(id)?;
+                let options = Options {
+                    grid: (item.grid.cols * item.grid.rows > 1).then_some(item.grid),
+                    grid_auto: false,
+                    ..item.options.clone()
+                };
+                let limit = svg2tgs_publish::rules::THUMB_TGS_MAX;
+                let out = svg2tgs_core::convert_grid_limited(&item.svg, &options, limit).ok()?;
+                out.tiles.into_iter().nth(tile).map(|c| c.tgs)
+            },
+        )?;
         let bot = tg.bot_with(Access::Saved, None, telegram::http)?;
         telegram::reset_stop(&tg.stop);
         let done = svg2tgs_publish::run(
@@ -539,6 +554,75 @@ async fn tg_publish(
             title: job.title.clone(),
             kind: job.kind,
         });
+        Ok(done)
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Стикер набора для окна «Набор»: картинка (PNG data-URL, сторона `size`)
+/// и размер файла — обложка набора стикеров принимается до 32 КБ.
+#[derive(Serialize)]
+struct StickerPreview {
+    png: Option<String>,
+    bytes: usize,
+}
+
+#[tauri::command]
+async fn tg_sticker_preview(
+    file_id: String,
+    size: u32,
+    app: tauri::AppHandle,
+) -> Result<StickerPreview, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tgs = app
+            .state::<Telegram>()
+            .sticker_file(&file_id, telegram::http)?;
+        let png = svg2tgs_render::render_tgs(&tgs, size.clamp(16, 512), 0)
+            .ok()
+            .map(|img| {
+                let png = base64::engine::general_purpose::STANDARD.encode(img.to_png());
+                format!("data:image/png;base64,{png}")
+            });
+        Ok(StickerPreview {
+            png,
+            bytes: tgs.len(),
+        })
+    })
+    .await
+    .map_err(join_error)?
+}
+
+/// Править набор: удалить, эмодзи, порядок, обложка; ход — через `on_progress`.
+#[tauri::command]
+async fn tg_edit(
+    request: EditRequest,
+    on_progress: tauri::ipc::Channel<svg2tgs_publish::Progress>,
+    app: tauri::AppHandle,
+) -> Result<svg2tgs_publish::EditDone, TgError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tg = app.state::<Telegram>();
+        let config = tg.config();
+        let bot_name = config.bot.clone().ok_or(TgError::NoToken)?;
+        let owner = config
+            .owner
+            .clone()
+            .ok_or(TgError::Publish(svg2tgs_publish::PublishError::NoOwner))?;
+        let edit = telegram::build_edit(&request, &bot_name, |id| {
+            tg.sticker_file(id, telegram::http)
+        })?;
+        let bot = tg.bot_with(Access::Saved, None, telegram::http)?;
+        telegram::reset_stop(&tg.stop);
+        let done = svg2tgs_publish::apply(
+            &bot,
+            owner.id,
+            request.kind,
+            &edit,
+            |p| {
+                let _ = on_progress.send(p);
+            },
+            &tg.stop,
+        )?;
         Ok(done)
     })
     .await
@@ -613,6 +697,8 @@ pub fn run() {
             tg_stem,
             tg_set_info,
             tg_publish,
+            tg_sticker_preview,
+            tg_edit,
             tg_stop,
             tg_open,
         ])

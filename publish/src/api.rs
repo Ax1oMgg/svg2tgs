@@ -23,6 +23,13 @@ pub type Form = Vec<(String, Field)>;
 /// Вызов метода Bot API. Возвращает поле `result` ответа или отказ.
 pub trait Transport {
     fn call(&self, method: &str, form: Form) -> Result<Value, Failure>;
+
+    /// Скачать файл по `file_path` из ответа `getFile`.
+    fn download(&self, file_path: &str) -> Result<Vec<u8>, Failure> {
+        Err(Failure::Unexpected(format!(
+            "скачивание недоступно: {file_path}"
+        )))
+    }
 }
 
 /// Бот, через которого создаются наборы.
@@ -42,14 +49,48 @@ pub struct Owner {
     pub first_name: String,
 }
 
-/// Набор в Telegram — столько, сколько нужно для продолжения выгрузки.
+/// Набор в Telegram: для продолжения выгрузки и для правки набора.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetInfo {
     pub title: String,
     pub count: usize,
     /// Тип набора (`sticker_type`); `None` — Telegram не сообщил.
     pub kind: Option<SetKind>,
+    /// Стикеры по порядку.
+    pub stickers: Vec<StickerInfo>,
 }
+
+/// Стикер набора.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StickerInfo {
+    /// Идентификатор файла: по нему стикер двигают, правят и удаляют.
+    pub file_id: String,
+    /// Постоянный идентификатор (у `file_id` он может меняться).
+    pub file_unique_id: String,
+    /// Эмодзи стикера. `getStickerSet` отдаёт только первый из списка.
+    pub emoji: Option<String>,
+    /// Для набора эмодзи — идентификатор эмодзи (нужен для обложки).
+    pub custom_emoji_id: Option<String>,
+    /// Анимированный (TGS); другие форматы программа не создаёт.
+    pub is_animated: bool,
+}
+
+impl StickerInfo {
+    fn from_json(v: &Value) -> Self {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+        Self {
+            file_id: s("file_id").unwrap_or_default(),
+            file_unique_id: s("file_unique_id").unwrap_or_default(),
+            emoji: s("emoji"),
+            custom_emoji_id: s("custom_emoji_id"),
+            is_animated: v.get("is_animated").and_then(Value::as_bool) == Some(true),
+        }
+    }
+}
+
+/// Самый большой файл, который программа скачивает (стикер — до 64 КБ).
+pub const DOWNLOAD_MAX: usize = 1024 * 1024;
 
 /// Стикер для `createNewStickerSet` и `addStickerToSet`.
 #[derive(Clone, Debug)]
@@ -269,6 +310,11 @@ impl<T: Transport> Bot<T> {
                     .get("stickers")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
+                stickers: v
+                    .get("stickers")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(StickerInfo::from_json).collect())
+                    .unwrap_or_default(),
                 kind: match v.get("sticker_type").and_then(Value::as_str) {
                     Some("regular") => Some(SetKind::Stickers),
                     Some("custom_emoji") => Some(SetKind::Emoji),
@@ -279,6 +325,151 @@ impl<T: Transport> Bot<T> {
                 Ok(None)
             }
             Err(e) => Err(e),
+        }
+    }
+    /// `setStickerPositionInSet`: передвинуть стикер на место `position` (с 0).
+    pub fn set_position(
+        &self,
+        file_id: &str,
+        position: usize,
+        pause: Pause,
+    ) -> Result<(), Failure> {
+        self.call_paced(
+            "setStickerPositionInSet",
+            vec![
+                ("sticker".into(), text(file_id)),
+                ("position".into(), text(position)),
+            ],
+            pause,
+        )
+        .map(drop)
+    }
+
+    /// `setStickerEmojiList`: заменить эмодзи стикера (1–20).
+    pub fn set_emoji(&self, file_id: &str, emoji: &[String], pause: Pause) -> Result<(), Failure> {
+        self.call_paced(
+            "setStickerEmojiList",
+            vec![
+                ("sticker".into(), text(file_id)),
+                ("emoji_list".into(), text(serde_json::json!(emoji))),
+            ],
+            pause,
+        )
+        .map(drop)
+    }
+
+    /// `deleteStickerFromSet`: убрать стикер из набора (не отменить).
+    pub fn delete_sticker(&self, file_id: &str, pause: Pause) -> Result<(), Failure> {
+        self.call_paced(
+            "deleteStickerFromSet",
+            vec![("sticker".into(), text(file_id))],
+            pause,
+        )
+        .map(drop)
+    }
+
+    /// `setStickerSetThumbnail`: обложка набора стикеров — файл TGS
+    /// (до [`crate::rules::THUMB_TGS_MAX`]).
+    pub fn set_sticker_thumbnail(
+        &self,
+        owner: i64,
+        name: &str,
+        tgs: Vec<u8>,
+        pause: Pause,
+    ) -> Result<(), Failure> {
+        self.call_paced(
+            "setStickerSetThumbnail",
+            vec![
+                ("name".into(), text(name)),
+                ("user_id".into(), text(owner)),
+                ("format".into(), text("animated")),
+                (
+                    "thumbnail".into(),
+                    Field::File {
+                        filename: "cover.tgs".into(),
+                        bytes: tgs,
+                    },
+                ),
+            ],
+            pause,
+        )
+        .map(drop)
+    }
+
+    /// `setCustomEmojiStickerSetThumbnail`: обложка набора эмодзи — один из
+    /// его эмодзи.
+    pub fn set_emoji_thumbnail(
+        &self,
+        name: &str,
+        custom_emoji_id: &str,
+        pause: Pause,
+    ) -> Result<(), Failure> {
+        self.call_paced(
+            "setCustomEmojiStickerSetThumbnail",
+            vec![
+                ("name".into(), text(name)),
+                ("custom_emoji_id".into(), text(custom_emoji_id)),
+            ],
+            pause,
+        )
+        .map(drop)
+    }
+
+    /// `getFile` и скачивание: файл стикера (для превью набора и обложки).
+    pub fn download_sticker(&self, file_id: &str) -> Result<Vec<u8>, Failure> {
+        let v = self.call("getFile", vec![("file_id".into(), text(file_id))])?;
+        let path = v
+            .get("file_path")
+            .and_then(Value::as_str)
+            .filter(|p| file_path_is_safe(p))
+            .ok_or_else(|| {
+                Failure::Unexpected(format!(
+                    "getFile без file_path: {}",
+                    crate::http::snippet(&v.to_string())
+                ))
+            })?;
+        let bytes = self.transport.download(path)?;
+        if bytes.len() > DOWNLOAD_MAX {
+            return Err(Failure::Unexpected(format!(
+                "файл {} байт больше {DOWNLOAD_MAX}",
+                bytes.len()
+            )));
+        }
+        Ok(bytes)
+    }
+}
+
+/// `file_path` из ответа Telegram — только обычный относительный путь
+/// (`stickers/file_1.tgs`): без `..`, схемы, запроса и пробелов.
+pub(crate) fn file_path_is_safe(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 256
+        && !p.starts_with('/')
+        && p.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+        && p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_path_is_safe;
+
+    #[test]
+    fn only_plain_file_paths_are_downloaded() {
+        assert!(file_path_is_safe("stickers/file_12.tgs"));
+        for bad in [
+            "",
+            "/etc/passwd",
+            "a/../b",
+            "../x",
+            "a//b",
+            "a?b=1",
+            "http://x/y",
+            "a b",
+            "a/./b",
+        ] {
+            assert!(!file_path_is_safe(bad), "{bad}");
         }
     }
 }
