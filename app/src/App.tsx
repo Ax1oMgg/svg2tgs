@@ -466,9 +466,9 @@ export function App() {
       : null;
   const ready = items.filter((it) => (it.status === "ok" || it.status === "warn") && it.outcome && !it.outcome.error);
   const connected = !!tg.bot && !!tg.owner;
-  const publish = web
-    ? { title: t.webTelegramOff, onClick: null }
-    : tg.enabled
+  // Как в программе: кнопки нет, пока выгрузка не включена в «Настройках»;
+  // в веб-версии её включить нельзя — кнопки нет совсем.
+  const publish = !web && tg.enabled
     ? {
         title: !connected ? t.tgPublishNoBot : sliced ? t.tgPublishGrid(sliced.name) : t.tgPublishList,
         onClick:
