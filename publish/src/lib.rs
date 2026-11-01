@@ -7,15 +7,19 @@
 //! ([`PublishError`]), тексты для людей — в интерфейсе и CLI.
 
 pub mod api;
+pub mod edit;
 pub mod error;
 pub mod http;
 pub mod job;
 pub mod rules;
 
-pub use api::{Bot, BotInfo, Field, Form, NewSticker, Owner, Pause, SetInfo, Transport};
+pub use api::{
+    Bot, BotInfo, Field, Form, NewSticker, Owner, Pause, SetInfo, StickerInfo, Transport,
+};
+pub use edit::{apply, validate_edit, Edit, EditCover, EditDone};
 pub use error::{Failure, PublishError};
 pub use http::HttpTransport;
-pub use job::{run, validate, Done, Item, Job, Progress, Source};
+pub use job::{run, validate, Cover, Done, Item, Job, Progress, Source};
 pub use rules::SetKind;
 
 /// Бот по токену, с настоящим HTTPS.

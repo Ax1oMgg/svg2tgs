@@ -91,6 +91,20 @@ pub enum PublishError {
     /// Telegram): HTTP-код и начало ответа.
     #[error("unexpected")]
     Unexpected { detail: String },
+    /// Набор изменился с тех пор, как его открыли (стикеры добавлены или
+    /// удалены не этой правкой): правку надо начать заново.
+    #[error("set_changed")]
+    SetChanged { name: String },
+    /// Обложка набора стикеров больше, чем принимает Telegram.
+    #[error("thumb_too_big")]
+    ThumbTooBig { bytes: usize, max: usize },
+    /// Обложку нельзя взять отсюда: номер вне задания или стикера нет
+    /// в наборе, у набора эмодзи — не его эмодзи.
+    #[error("cover_invalid")]
+    CoverInvalid,
+    /// Правка удалила бы все стикеры: пустой набор Telegram не хранит.
+    #[error("delete_all")]
+    DeleteAll,
 }
 
 impl PublishError {

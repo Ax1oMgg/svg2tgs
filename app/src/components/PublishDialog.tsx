@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as backend from "../backend";
 import type { Lang } from "../i18n";
 import { strings, tgErrorText } from "../i18n";
-import type { FileItem, PublishDone, PublishProgress, SetKind, SetView, TgError, TgStatus } from "../types";
+import { THUMB_TGS_MAX, type FileItem, type PublishDone, type PublishProgress, type SetKind, type SetView, type TgError, type TgStatus } from "../types";
 import { SegButton } from "./Preview";
+import { SetPicker, stemOf } from "./SetPicker";
 
 /** Что выгружаем: клетки нарезки одного файла или файлы списка. */
 export type PublishSource =
@@ -17,6 +18,10 @@ interface Props {
   /** Стикеры или эмодзи — по умолчанию (нарезка — эмодзи). */
   defaultKind: SetKind;
   onToast: (text: string) => void;
+  /** Открыть окно «Набор» для набора с этим полным именем. */
+  onEditSet: (name: string) => void;
+  /** Меняется, когда окно «Набор» закрыто: число стикеров могло измениться. */
+  setsVersion: number;
   onClose: () => void;
 }
 
@@ -28,6 +33,8 @@ interface Entry {
   /** Имя файла для Telegram, без расширения. */
   name: string;
   thumb?: string;
+  /** Размер готового файла (у нарезки — самой большой клетки). */
+  bytes?: number;
 }
 
 type Phase = "form" | "running" | "broken" | "done";
@@ -51,8 +58,9 @@ function entriesOf(source: PublishSource): Entry[] {
   const tilesOf = (it: FileItem): Entry[] => {
     const [c, r] = it.outcome?.grid ?? [1, 1];
     const n = c * r;
-    if (n <= 1) return [{ key: it.id, id: it.id, tile: null, name: base(it.name), thumb: it.thumb }];
-    return Array.from({ length: n }, (_, i) => ({ key: `${it.id}:${i}`, id: it.id, tile: i, name: `${base(it.name)}_${pad(i)}` }));
+    const bytes = it.outcome?.tgsBytes ?? undefined;
+    if (n <= 1) return [{ key: it.id, id: it.id, tile: null, name: base(it.name), thumb: it.thumb, bytes }];
+    return Array.from({ length: n }, (_, i) => ({ key: `${it.id}:${i}`, id: it.id, tile: i, name: `${base(it.name)}_${pad(i)}`, bytes }));
   };
   return source.kind === "grid" ? tilesOf(source.item) : source.items.flatMap(tilesOf);
 }
@@ -61,7 +69,7 @@ function entriesOf(source: PublishSource): Entry[] {
  * Окно выгрузки в Telegram: форма → ход → (обрыв → продолжить) → готово.
  * Во время выгрузки окно не закрывается — только «Остановить».
  */
-export function PublishDialog({ lang, status, source, defaultKind, onToast, onClose }: Props) {
+export function PublishDialog({ lang, status, source, defaultKind, onToast, onEditSet, setsVersion, onClose }: Props) {
   const t = strings[lang];
   const ref = useRef<HTMLDialogElement>(null);
   const entries = useMemo(() => entriesOf(source), [source]);
@@ -72,6 +80,8 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
   const [emojiAll, setEmojiAll] = useState("⭐");
   const [own, setOwn] = useState<Record<string, string>>({});
   const [cell, setCell] = useState<number | null>(null);
+  // Обложка — ключ стикера задания; `null` — как у Telegram (первый).
+  const [cover, setCover] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("form");
   const [progress, setProgress] = useState<PublishProgress>({ done: 0, total: entries.length });
   const [error, setError] = useState<TgError | null>(null);
@@ -84,7 +94,6 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
   const [finding, setFinding] = useState(false);
   const [fixedBase, setFixedBase] = useState<number | null>(null);
   const suffix = `_by_${status.bot}`;
-  const stemOf = (name: string) => (name.toLowerCase().endsWith(suffix.toLowerCase()) ? name.slice(0, -suffix.length) : name);
 
   useEffect(() => {
     if (!ref.current?.open) ref.current?.showModal();
@@ -117,6 +126,12 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
     }
   };
 
+  // После окна «Набор» найденный набор мог измениться — спросить заново.
+  useEffect(() => {
+    if (setsVersion > 0 && mode === "append" && phase === "form" && stem.trim()) void find(stem);
+    // Только по закрытию окна «Набор».
+  }, [setsVersion]);
+
   const pickMode = (m: Mode) => {
     if (m === mode) return;
     setMode(m);
@@ -127,8 +142,8 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
       // Последний набор, в который выгружали, — сразу ищем его.
       const last = status.sets[0];
       if (last) {
-        setStem(stemOf(last.name));
-        void find(stemOf(last.name));
+        setStem(stemOf(last.name, status.bot));
+        void find(stemOf(last.name, status.bot));
       } else setStem("");
     } else setStemTouched(false);
   };
@@ -162,6 +177,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
           resume,
           appendBase,
           items: entries.map((e) => ({ id: e.id, tile: e.tile, name: e.name, emoji: emojiOf(e) })),
+          cover: cover == null ? null : Math.max(0, entries.findIndex((e) => e.key === cover)),
         },
         setProgress,
       );
@@ -178,6 +194,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
     }
   };
 
+  const coverEntry = entries.find((e) => e.key === cover) ?? null;
   const running = phase === "running";
   const heading = phase === "done" ? t.pubDoneTitle : phase === "form" ? t.pubTitle : t.pubRunning;
   const pct = `${(progress.done / Math.max(1, progress.total)) * 100}%`;
@@ -251,11 +268,11 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
               </label>
             )}
 
-            <div className="field">
-              <label className="field__label" htmlFor="pub-stem">
-                {t.pubAddress}
-              </label>
-              <div className="row">
+            {mode === "new" ? (
+              <div className="field">
+                <label className="field__label" htmlFor="pub-stem">
+                  {t.pubAddress}
+                </label>
                 <span className="pub__address">
                   <span className="pub__affix">t.me/{kind === "emoji" ? "addemoji" : "addstickers"}/</span>
                   <input
@@ -263,40 +280,46 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                     type="text"
                     value={stem}
                     spellCheck={false}
-                    list={mode === "append" ? "pub-known" : undefined}
                     onChange={(e) => {
                       setStemTouched(true);
                       setStem(e.target.value.replace(/[^A-Za-z0-9_]/g, ""));
-                      if (mode === "append") setFound(null);
                     }}
-                    onKeyDown={(e) => mode === "append" && e.key === "Enter" && void find(stem)}
                   />
                   <span className="pub__affix">{suffix}</span>
                 </span>
-                {mode === "append" && (
-                  <button type="button" className="btn btn--default" disabled={!stem.trim() || finding} onClick={() => void find(stem)}>
-                    {finding ? t.pubFinding : t.pubFind}
-                  </button>
+              </div>
+            ) : (
+              <div className="field">
+                <div className="field__label">{t.pubAddress}</div>
+                <SetPicker
+                  lang={lang}
+                  status={status}
+                  stem={stem}
+                  finding={finding}
+                  onPick={(s) => {
+                    setStem(s);
+                    void find(s);
+                  }}
+                  onType={(s) => {
+                    setStem(s);
+                    setFound(null);
+                  }}
+                  onFind={() => void find(stem)}
+                />
+                {found && (
+                  <div className="pub__found">
+                    <p className={`note ${free >= entries.length ? "note--info" : "note--warn"}`}>
+                      {free >= entries.length
+                        ? t.pubFound(found.title, found.count, free)
+                        : t.pubFoundNoRoom(found.title, found.count, free, entries.length)}
+                    </p>
+                    <button type="button" className="btn btn--text" title={t.pubEditSetHint} onClick={() => onEditSet(found.name)}>
+                      {t.pubEditSet}
+                    </button>
+                  </div>
                 )}
               </div>
-              {mode === "append" && (
-                <datalist id="pub-known">
-                  {status.sets.map((s) => (
-                    <option key={s.name} value={stemOf(s.name)}>
-                      {s.title}
-                    </option>
-                  ))}
-                </datalist>
-              )}
-              {mode === "append" && found && (
-                <p className={`note ${free >= entries.length ? "note--info" : "note--warn"}`}>
-                  {free >= entries.length
-                    ? t.pubFound(found.title, found.count, free)
-                    : t.pubFoundNoRoom(found.title, found.count, free, entries.length)}
-                </p>
-              )}
-              {mode === "append" && !found && status.sets.length > 0 && <span className="hint">{t.pubKnownHint}</span>}
-            </div>
+            )}
 
             <div className="field">
               <div className="pub__emoji-head">
@@ -318,7 +341,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                         <button
                           key={e.key}
                           type="button"
-                          className={`pub__cell${cell === i ? " pub__cell--active" : ""}${own[e.key] != null ? " pub__cell--own" : ""}`}
+                          className={`pub__cell${cell === i ? " pub__cell--active" : ""}${own[e.key] != null ? " pub__cell--own" : ""}${cover === e.key ? " pub__cell--cover" : ""}`}
                           title={label}
                           aria-label={label}
                           aria-pressed={cell === i}
@@ -333,22 +356,25 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                               : undefined
                           }
                         >
+                          {cover === e.key && <CoverMark />}
                           <span className="pub__cell-emoji">{emojiOf(e)[0] ?? ""}</span>
                         </button>
                       );
                     })}
                   </div>
                   {cell != null && entries[cell] && (
-                    <label className="row pub__cell-edit">
-                      <span>{t.pubCell(cell + 1)}</span>
+                    <div className="row pub__cell-edit">
+                      <label htmlFor="pub-cell-emoji">{t.pubCell(cell + 1)}</label>
                       <input
+                        id="pub-cell-emoji"
                         type="text"
                         className="pub__emoji-input"
                         autoFocus
                         value={own[entries[cell].key] ?? emojiAll}
                         onChange={(e) => setOwn({ ...own, [entries[cell].key]: e.target.value })}
                       />
-                    </label>
+                      <CoverToggle lang={lang} on={cover === entries[cell].key} onChange={(on) => setCover(on ? entries[cell].key : null)} />
+                    </div>
                   )}
                   <span className="hint">{t.pubGridInfo(entries.length, grid.item.name, grid.cols, grid.rows)}</span>
                 </div>
@@ -369,10 +395,13 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                         value={own[e.key] ?? emojiAll}
                         onChange={(ev) => setOwn({ ...own, [e.key]: ev.target.value })}
                       />
+                      <CoverToggle lang={lang} on={cover === e.key} compact onChange={(on) => setCover(on ? e.key : null)} />
                     </li>
                   ))}
                 </ol>
               )}
+              <span className="hint">{coverEntry ? t.pubCoverIs(coverEntry.name) : t.pubCoverNone}</span>
+              {coverEntry && kind === "stickers" && (coverEntry.bytes ?? 0) > THUMB_TGS_MAX && <span className="hint">{t.pubCoverShrink}</span>}
             </div>
 
             {error && <p className="note note--error">{tgErrorText(error, lang)}</p>}
@@ -470,6 +499,7 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
                 <span className="hint">{t.pubDoneSub}</span>
               </span>
             </div>
+            {done.cover_error && <p className="note note--warn">{t.pubCoverFailed(tgErrorText(done.cover_error, lang))}</p>}
             <div className="pub__link">
               <span className="pub__link-text">{done.link.replace(/^https:\/\//, "")}</span>
               <button
@@ -486,6 +516,9 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
               </button>
             </div>
             <div className="dialog__actions">
+              <button type="button" className="btn btn--text" title={t.pubEditSetHint} onClick={() => onEditSet(done.name)}>
+                {t.pubEditSet}
+              </button>
               <button type="button" className="btn btn--default" onClick={() => void backend.tgOpen({ kind, name: done.name })}>
                 {t.pubOpen}
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -500,5 +533,40 @@ export function PublishDialog({ lang, status, source, defaultKind, onToast, onCl
         )}
       </div>
     </dialog>
+  );
+}
+
+/** Значок обложки на клетке нарезки. */
+function CoverMark() {
+  return (
+    <span className="pub__cover-mark" aria-hidden="true">
+      <StarIcon filled />
+    </span>
+  );
+}
+
+export function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+      <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" />
+    </svg>
+  );
+}
+
+/** «Обложка набора»: переключатель-звёздочка (в строке — только значок). */
+function CoverToggle({ lang, on, compact, onChange }: { lang: Lang; on: boolean; compact?: boolean; onChange: (on: boolean) => void }) {
+  const t = strings[lang];
+  return (
+    <button
+      type="button"
+      className={`btn btn--text pub__cover${compact ? " btn--icon" : ""}${on ? " pub__cover--on" : ""}`}
+      aria-pressed={on}
+      aria-label={t.pubCoverHint}
+      title={t.pubCoverHint}
+      onClick={() => onChange(!on)}
+    >
+      <StarIcon filled={on} />
+      {!compact && <span>{t.pubCover}</span>}
+    </button>
   );
 }

@@ -242,12 +242,49 @@ export interface KnownSet {
   kind: SetKind;
 }
 
-/** Набор в Telegram — для «Дописать». */
+/** Набор в Telegram — для «Дописать» и окна «Набор». */
 export interface SetView {
   name: string;
   title: string;
   count: number;
   kind: SetKind | null;
+  stickers: StickerInfo[];
+}
+
+/** Стикер набора (`publish::StickerInfo`). */
+export interface StickerInfo {
+  fileId: string;
+  fileUniqueId: string;
+  /** Первый эмодзи стикера — остальные Telegram не отдаёт. */
+  emoji: string | null;
+  customEmojiId: string | null;
+  isAnimated: boolean;
+}
+
+/** Картинка стикера набора и размер его файла. */
+export interface StickerPreview {
+  png: string | null;
+  bytes: number;
+}
+
+/** Правка набора (`telegram::EditRequest`). */
+export interface EditRequest {
+  name: string;
+  kind: SetKind;
+  /** Стикеры в порядке, в каком набор был открыт. */
+  seen: string[];
+  delete: string[];
+  /** Оставшиеся — в нужном порядке. */
+  order: string[];
+  emoji: { fileId: string; emoji: string[] }[];
+  /** Обложка — стикер набора; `null` — не менять. */
+  cover: string | null;
+}
+
+export interface EditDone {
+  name: string;
+  link: string;
+  count: number;
 }
 
 /** Ошибка выгрузки: код и параметры (`TgError`, `PublishError`). */
@@ -276,6 +313,8 @@ export interface PublishRequest {
   /** Дописать в существующий набор: сколько в нём было до первой попытки. */
   appendBase: number | null;
   items: PublishItem[];
+  /** Обложка — стикер задания с этим номером (с 0); `null` — не менять. */
+  cover: number | null;
 }
 
 export interface PublishProgress {
@@ -290,4 +329,9 @@ export interface PublishDone {
   link: string;
   count: number;
   resumed_from: number;
+  /** Стикеры выгружены, а обложку Telegram не принял. */
+  cover_error?: TgError | null;
 }
+
+/** Предел обложки набора стикеров (`rules::THUMB_TGS_MAX`). */
+export const THUMB_TGS_MAX = 32 * 1024;

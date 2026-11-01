@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use clap::{Parser, ValueEnum};
-use svg2tgs_publish::{rules, Item, Job, Owner, PublishError, SetKind, Source};
+use svg2tgs_publish::{rules, Cover, Item, Job, Owner, PublishError, SetKind, Source};
 
 use crate::messages;
 
@@ -26,7 +26,8 @@ pub const TOKEN_VAR: &str = "SVG2TGS_BOT_TOKEN";
         Примеры:\n  \
         svg2tgs publish ./tgs --title \"Сердечки\" --kind emoji --emoji ❤️\n  \
         svg2tgs publish ./tgs --title \"Сердечки\" --kind emoji --emoji ❤️ --resume\n  \
-        svg2tgs publish ./new --append --name serdechki --emoji ❤️\n\n\
+        svg2tgs publish ./new --append --name serdechki --emoji ❤️\n  \
+        svg2tgs publish ./tgs --title \"Чай\" --thumbnail 3\n\n\
         Коды выхода: 0 — набор готов, 1 — неверные параметры, 2 — ошибка выгрузки."
 )]
 pub struct PublishCli {
@@ -62,6 +63,11 @@ pub struct PublishCli {
     /// после обрыва дописать только оставшееся (программа подскажет число).
     #[arg(long, requires = "append")]
     base: Option<usize>,
+
+    /// Обложка набора: номер файла (с 1) или свой .tgs до 32 КБ (только
+    /// для набора стикеров; у набора эмодзи обложка — один из его эмодзи).
+    #[arg(long, value_name = "N|ФАЙЛ.tgs")]
+    thumbnail: Option<String>,
 
     /// Числовой id владельца в Telegram, если не хотите писать боту /start.
     #[arg(long)]
@@ -104,6 +110,17 @@ fn split_emoji(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Обложка из `--thumbnail`: номер файла (с 1) или путь к .tgs.
+fn cover_arg(arg: &str) -> Result<Cover, String> {
+    match arg.trim().parse::<usize>() {
+        Ok(0) => Err("номер файла для обложки — с 1".into()),
+        Ok(n) => Ok(Cover::Item(n - 1)),
+        Err(_) => std::fs::read(arg)
+            .map(Cover::Tgs)
+            .map_err(|e| format!("не удалось прочитать обложку {arg}: {e}")),
+    }
+}
+
 fn fail(json: bool, e: &PublishError) -> ExitCode {
     if json {
         println!("{}", serde_json::to_string(e).unwrap_or_default());
@@ -130,6 +147,13 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
         }
     };
     let emoji = split_emoji(&cli.emoji);
+    let cover = match cli.thumbnail.as_deref().map(cover_arg).transpose() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return ExitCode::from(1);
+        }
+    };
 
     let bot = svg2tgs_publish::connect(&token);
     let me = match bot.me() {
@@ -200,6 +224,7 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
             .collect(),
         resume: cli.resume,
         append,
+        cover,
     };
 
     if !cli.json {
@@ -252,6 +277,12 @@ pub fn main(args: impl IntoIterator<Item = std::ffi::OsString>) -> ExitCode {
                 println!("{}", serde_json::to_string(&done).unwrap_or_default());
             } else {
                 println!("✓ готово: {} шт. — {}", done.count, done.link);
+                if let Some(e) = &done.cover_error {
+                    eprintln!(
+                        "⚠ обложку поставить не удалось: {}",
+                        messages::publish_error(e)
+                    );
+                }
             }
             ExitCode::SUCCESS
         }
@@ -281,6 +312,18 @@ mod tests {
         assert_eq!(split_emoji("❤️"), vec!["❤️"]);
         assert_eq!(split_emoji("❤️, 😍 ⭐"), vec!["❤️", "😍", "⭐"]);
         assert!(split_emoji(" , ").is_empty());
+    }
+
+    #[test]
+    fn thumbnail_is_a_number_or_a_file() {
+        assert!(matches!(cover_arg("3"), Ok(Cover::Item(2))));
+        assert!(cover_arg("0").is_err());
+        assert!(cover_arg("нет-такого.tgs").is_err());
+        let path = std::env::temp_dir().join(format!("svg2tgs-cover-{}.tgs", std::process::id()));
+        std::fs::write(&path, [0x1f, 0x8b]).unwrap();
+        let got = cover_arg(path.to_str().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(got, Ok(Cover::Tgs(b)) if b == [0x1f, 0x8b]));
     }
 
     #[test]

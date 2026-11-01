@@ -638,9 +638,8 @@ fn thin_lines_are_reported_for_emoji_only() {
     assert!(!has(&convert(&fixture("stroke-icon.svg"), &emoji).unwrap()));
 }
 
-#[test]
-fn heavy_drawing_is_simplified_to_fit_the_limit() {
-    // Сотни мелких зубчатых многоугольников: без упрощения > 64 КБ.
+/// Сотни мелких зубчатых многоугольников: без упрощения > 64 КБ.
+fn heavy_svg() -> String {
     let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">"#);
     for row in 0..20 {
         for col in 0..20 {
@@ -660,7 +659,12 @@ fn heavy_drawing_is_simplified_to_fit_the_limit() {
         }
     }
     svg += "</svg>";
+    svg
+}
 
+#[test]
+fn heavy_drawing_is_simplified_to_fit_the_limit() {
+    let svg = heavy_svg();
     let lossless = convert(
         svg.as_bytes(),
         &Options {
@@ -685,6 +689,31 @@ fn heavy_drawing_is_simplified_to_fit_the_limit() {
         .warnings
         .iter()
         .any(|w| matches!(w.code, WarningCode::SizeOverLimit { .. })));
+}
+
+#[test]
+fn cover_fits_a_smaller_limit() {
+    // Обложка набора стикеров: Telegram принимает TGS до 32 КБ — предел
+    // меньше обычного. Здесь предел ещё меньше, чем обычный результат.
+    let svg = heavy_svg();
+    let usual = convert(svg.as_bytes(), &Options::default()).unwrap();
+    let limit = usual.tgs_bytes() * 2 / 3;
+    let tiles =
+        svg2tgs_core::convert_grid_limited(svg.as_bytes(), &Options::default(), limit).unwrap();
+    let cover = &tiles.tiles[0];
+    assert!(
+        cover.tgs_bytes() <= limit,
+        "{} > {limit}",
+        cover.tgs_bytes()
+    );
+    assert!(!cover
+        .warnings
+        .iter()
+        .any(|w| matches!(w.code, WarningCode::SizeOverLimit { .. })));
+    // Обычный предел — тот же результат, что у `convert`.
+    let same =
+        svg2tgs_core::convert_grid_limited(svg.as_bytes(), &Options::default(), 64 * 1024).unwrap();
+    assert_eq!(same.tiles[0].tgs, usual.tgs);
 }
 
 #[test]

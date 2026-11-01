@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use svg2tgs_publish::{
-    run, validate, Bot, Failure, Field, Form, Item, Job, Progress, PublishError, SetKind, Source,
-    Transport,
+    apply, run, validate, Bot, Cover, Edit, EditCover, Failure, Field, Form, Item, Job, Progress,
+    PublishError, SetKind, Source, Transport,
 };
 
 const BOT: &str = "tea_stickers_bot";
@@ -35,6 +35,8 @@ struct State {
     webhook: bool,
     /// Свой предел набора вместо 120/200.
     cap: Option<usize>,
+    /// Обложки наборов: `tgs:<байт>` или `emoji:<custom_emoji_id>`.
+    thumbs: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -172,13 +174,89 @@ impl Transport for Fake {
                 Ok(json!(true))
             }
             "getStickerSet" => match s.sets.get(&text(&form, "name")) {
-                Some((ty, st)) => Ok(
-                    json!({"title": "t", "sticker_type": ty, "stickers": vec![json!({}); st.len()]}),
-                ),
+                Some((ty, st)) => {
+                    let stickers: Vec<Value> = st
+                        .iter()
+                        .map(|(id, emoji)| {
+                            let mut v = json!({"file_id": id, "file_unique_id": format!("u{id}"),
+                                "emoji": emoji[0], "is_animated": true});
+                            if ty == "custom_emoji" {
+                                v["custom_emoji_id"] = json!(format!("ce{id}"));
+                            }
+                            v
+                        })
+                        .collect();
+                    Ok(json!({"title": "t", "sticker_type": ty, "stickers": stickers}))
+                }
                 None => Err(bad("STICKERSET_INVALID")),
             },
+            "deleteStickerFromSet" | "setStickerEmojiList" | "setStickerPositionInSet" => {
+                let id = text(&form, "sticker");
+                let Some(set) = s
+                    .sets
+                    .values_mut()
+                    .find(|set| set.1.iter().any(|x| x.0 == id))
+                else {
+                    return Err(bad("STICKER_ID_INVALID"));
+                };
+                let j = set.1.iter().position(|x| x.0 == id).unwrap();
+                match method {
+                    "deleteStickerFromSet" => {
+                        set.1.remove(j);
+                    }
+                    "setStickerEmojiList" => {
+                        let list: Vec<String> =
+                            serde_json::from_str(&text(&form, "emoji_list")).unwrap();
+                        set.1[j].1 = list;
+                    }
+                    _ => {
+                        let at: usize = text(&form, "position").parse().unwrap();
+                        if at >= set.1.len() {
+                            return Err(bad("STICKER_POSITION_INVALID"));
+                        }
+                        let x = set.1.remove(j);
+                        set.1.insert(at, x);
+                    }
+                }
+                Ok(json!(true))
+            }
+            "setStickerSetThumbnail" => {
+                assert_eq!(text(&form, "format"), "animated");
+                assert_eq!(text(&form, "user_id"), OWNER.to_string());
+                let name = text(&form, "name");
+                let Some(Field::File { bytes, .. }) = get(&form, "thumbnail") else {
+                    return Err(bad("THUMBNAIL_INVALID"));
+                };
+                if s.sets.get(&name).is_none_or(|set| set.0 != "regular") {
+                    return Err(bad("STICKERSET_INVALID"));
+                }
+                let v = format!("tgs:{}", bytes.len());
+                s.thumbs.insert(name, v);
+                Ok(json!(true))
+            }
+            "setCustomEmojiStickerSetThumbnail" => {
+                let name = text(&form, "name");
+                let id = text(&form, "custom_emoji_id");
+                let ok = s.sets.get(&name).is_some_and(|set| {
+                    set.0 == "custom_emoji" && set.1.iter().any(|x| format!("ce{}", x.0) == id)
+                });
+                if !ok {
+                    return Err(bad("CUSTOM_EMOJI_INVALID"));
+                }
+                s.thumbs.insert(name, format!("emoji:{id}"));
+                Ok(json!(true))
+            }
+            "getFile" => Ok(json!({"file_id": text(&form, "file_id"),
+                "file_path": format!("stickers/{}.tgs", text(&form, "file_id"))})),
             other => panic!("неожиданный метод {other}"),
         }
+    }
+
+    fn download(&self, file_path: &str) -> Result<Vec<u8>, Failure> {
+        let mut s = self.0.lock().unwrap();
+        s.calls.push("download".into());
+        assert!(file_path.starts_with("stickers/"), "{file_path}");
+        Ok(TGS.to_vec())
     }
 }
 
@@ -198,6 +276,7 @@ fn job(n: usize, kind: SetKind) -> Job {
             .collect(),
         resume: false,
         append: None,
+        cover: None,
     }
 }
 
@@ -592,4 +671,246 @@ fn errors_serialize_as_codes() {
     })
     .unwrap();
     assert_eq!(v, json!({"code": "network", "done": 23, "detail": "io"}));
+}
+
+fn thumb(fake: &Fake, name: &str) -> Option<String> {
+    fake.0.lock().unwrap().thumbs.get(name).cloned()
+}
+
+#[test]
+fn cover_is_set_after_upload() {
+    // Набор эмодзи: обложка — третий эмодзи задания.
+    let fake = Fake::new();
+    let mut j = job(5, SetKind::Emoji);
+    j.cover = Some(Cover::Item(2));
+    let done = run(&bot(&fake), BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(done.cover_error, None);
+    assert_eq!(thumb(&fake, &done.name).as_deref(), Some("emoji:cef3"));
+
+    // Дописали два эмодзи к трём: обложка — второй дописанный, пятый в наборе.
+    let fake = Fake::new();
+    run(
+        &bot(&fake),
+        BOT,
+        OWNER,
+        &job(3, SetKind::Emoji),
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let mut j = job(2, SetKind::Emoji);
+    j.append = Some(3);
+    j.cover = Some(Cover::Item(1));
+    let done = run(&bot(&fake), BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(thumb(&fake, &done.name).as_deref(), Some("emoji:cef5"));
+
+    // Набор стикеров: обложка — отдельный файл TGS.
+    let fake = Fake::new();
+    let mut j = job(2, SetKind::Stickers);
+    j.cover = Some(Cover::Tgs(TGS.to_vec()));
+    let done = run(&bot(&fake), BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(thumb(&fake, &done.name).as_deref(), Some("tgs:4"));
+}
+
+#[test]
+fn rejected_cover_keeps_the_set() {
+    let fake = Fake::new();
+    let mut j = job(3, SetKind::Stickers);
+    j.cover = Some(Cover::Item(1));
+    // getStickerSet, upload+create, 2 × (upload+add), затем обложка — отказ.
+    let fake = fake.with(|s| s.fail_at = Some((8, Failure::Network("io".into()))));
+    let done = run(&bot(&fake), BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert_eq!(done.count, 3);
+    assert_eq!(fake.set(&done.name).unwrap().len(), 3);
+    assert!(matches!(
+        done.cover_error,
+        Some(PublishError::Network { .. })
+    ));
+}
+
+#[test]
+fn bad_covers_fail_before_any_request() {
+    let fake = Fake::new();
+    let b = bot(&fake);
+    let mut j = job(3, SetKind::Emoji);
+    j.cover = Some(Cover::Item(3));
+    assert_eq!(validate(&j, BOT), Err(PublishError::CoverInvalid));
+    j.cover = Some(Cover::Tgs(TGS.to_vec()));
+    assert_eq!(validate(&j, BOT), Err(PublishError::CoverInvalid));
+    let mut j = job(3, SetKind::Stickers);
+    j.items[0].source = Source::Bytes(vec![0x1f; 32 * 1024 + 1]);
+    j.cover = Some(Cover::Item(0));
+    assert_eq!(
+        run(&b, BOT, OWNER, &j, |_| {}, &AtomicBool::new(false)),
+        Err(PublishError::ThumbTooBig {
+            bytes: 32 * 1024 + 1,
+            max: 32 * 1024
+        })
+    );
+    assert!(fake.0.lock().unwrap().calls.is_empty());
+}
+
+/// Набор из `n` эмодзи (`f1`…`fn`), созданный выгрузкой.
+fn emoji_set(n: usize) -> (Fake, String) {
+    let fake = Fake::new();
+    let done = run(
+        &bot(&fake),
+        BOT,
+        OWNER,
+        &job(n, SetKind::Emoji),
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    (fake, done.name)
+}
+
+fn ids(fake: &Fake, name: &str) -> Vec<String> {
+    fake.set(name).unwrap().into_iter().map(|s| s.0).collect()
+}
+
+fn f(list: &[usize]) -> Vec<String> {
+    list.iter().map(|i| format!("f{i}")).collect()
+}
+
+#[test]
+fn edit_deletes_changes_emoji_reorders_and_sets_cover() {
+    let (fake, name) = emoji_set(5);
+    let edit = Edit {
+        name: name.clone(),
+        seen: f(&[1, 2, 3, 4, 5]),
+        delete: f(&[2]),
+        order: f(&[5, 1, 3, 4]),
+        emoji: vec![
+            ("f3".into(), vec!["🔥".into(), "✨".into()]),
+            // Тот же эмодзи — запроса не будет.
+            ("f4".into(), vec!["❤️".into()]),
+        ],
+        cover: Some(EditCover::Sticker("f5".into())),
+    };
+    let mut seen = Vec::new();
+    let done = apply(
+        &bot(&fake),
+        OWNER,
+        SetKind::Emoji,
+        &edit,
+        |p| seen.push((p.done, p.total)),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(done.count, 4);
+    assert_eq!(ids(&fake, &name), f(&[5, 1, 3, 4]));
+    assert_eq!(fake.set(&name).unwrap()[2].1, vec!["🔥", "✨"]);
+    assert_eq!(thumb(&fake, &name).as_deref(), Some("emoji:cef5"));
+    // Удаление, эмодзи, одна перестановка, обложка.
+    assert_eq!(seen.last(), Some(&(4, 4)));
+    assert_eq!(fake.calls("setStickerEmojiList"), 1);
+    assert_eq!(fake.calls("setStickerPositionInSet"), 1);
+}
+
+#[test]
+fn edit_continues_after_a_break_without_repeating() {
+    let (fake, name) = emoji_set(5);
+    let edit = Edit {
+        name: name.clone(),
+        seen: f(&[1, 2, 3, 4, 5]),
+        delete: f(&[1, 2]),
+        order: f(&[5, 4, 3]),
+        ..Edit::default()
+    };
+    // Обрыв на втором удалении.
+    let n = fake.0.lock().unwrap().calls.len();
+    let fake = fake.with(|s| s.fail_at = Some((n + 3, Failure::Network("io".into()))));
+    let err = apply(
+        &bot(&fake),
+        OWNER,
+        SetKind::Emoji,
+        &edit,
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        PublishError::Network {
+            done: 1,
+            detail: "io".into()
+        }
+    );
+    assert_eq!(ids(&fake, &name), f(&[2, 3, 4, 5]));
+    // Та же правка ещё раз: первое удаление не повторяется.
+    apply(
+        &bot(&fake),
+        OWNER,
+        SetKind::Emoji,
+        &edit,
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(ids(&fake, &name), f(&[5, 4, 3]));
+    assert_eq!(fake.calls("deleteStickerFromSet"), 3);
+}
+
+#[test]
+fn edit_refuses_a_set_changed_elsewhere() {
+    let (fake, name) = emoji_set(3);
+    let edit = Edit {
+        name: name.clone(),
+        seen: f(&[1, 2]),
+        order: f(&[2, 1]),
+        ..Edit::default()
+    };
+    let err = apply(
+        &bot(&fake),
+        OWNER,
+        SetKind::Emoji,
+        &edit,
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert_eq!(err, PublishError::SetChanged { name: name.clone() });
+    assert_eq!(fake.calls("setStickerPositionInSet"), 0);
+    let wrong_kind = apply(
+        &bot(&fake),
+        OWNER,
+        SetKind::Stickers,
+        &Edit {
+            seen: f(&[1, 2, 3]),
+            order: f(&[1, 2, 3]),
+            ..edit
+        },
+        |_| {},
+        &AtomicBool::new(false),
+    );
+    assert_eq!(wrong_kind, Err(PublishError::KindMismatch { name }));
+}
+
+#[test]
+fn edit_is_stopped_between_requests() {
+    let (fake, name) = emoji_set(3);
+    let edit = Edit {
+        name,
+        seen: f(&[1, 2, 3]),
+        order: f(&[3, 2, 1]),
+        ..Edit::default()
+    };
+    let stop = AtomicBool::new(true);
+    let err = apply(&bot(&fake), OWNER, SetKind::Emoji, &edit, |_| {}, &stop).unwrap_err();
+    assert_eq!(err, PublishError::Stopped { done: 0 });
+    assert_eq!(fake.calls("setStickerPositionInSet"), 0);
+}
+
+#[test]
+fn stickers_are_downloaded_by_file_id() {
+    let (fake, name) = emoji_set(2);
+    let b = bot(&fake);
+    let set = b.get_set(&name).unwrap().unwrap();
+    assert_eq!(set.stickers[1].file_id, "f2");
+    assert_eq!(set.stickers[1].custom_emoji_id.as_deref(), Some("cef2"));
+    assert_eq!(set.stickers[1].emoji.as_deref(), Some("❤️"));
+    assert_eq!(b.download_sticker("f2").unwrap(), TGS.to_vec());
+    assert_eq!(fake.calls("getFile"), 1);
+    assert_eq!(fake.calls("download"), 1);
 }

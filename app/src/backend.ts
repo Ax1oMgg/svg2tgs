@@ -12,6 +12,8 @@ import * as web from "@web";
 import { version as appVersion } from "../package.json";
 import {
   DEFAULT_OPTIONS,
+  type EditDone,
+  type EditRequest,
   type Existing,
   type Options,
   type OptionsError,
@@ -25,6 +27,8 @@ import {
   type SetKind,
   type SetView,
   type Source,
+  type StickerInfo,
+  type StickerPreview,
   type TgError,
   type TgStatus,
 } from "./types";
@@ -49,7 +53,7 @@ export const isWeb = (): boolean => import.meta.env.VITE_TARGET === "web";
 export async function getAppInfo(): Promise<AppInfo> {
   if (isWeb()) return { version: appVersion, coreVersion: await web.coreVersion(), runtime: "web" };
   if (!isTauri()) {
-    return { version: "0.2.0", coreVersion: "0.2.0", runtime: "browser" };
+    return { version: "0.2.1", coreVersion: "0.2.1", runtime: "browser" };
   }
   const info = await invoke<Omit<AppInfo, "runtime">>("app_info");
   return { ...info, runtime: "tauri" };
@@ -261,10 +265,48 @@ export async function tgSetInfo(stem: string): Promise<SetView> {
   if (isTauri()) return tgCall<SetView>("tg_set_info", { stem });
   await delay(400);
   const name = `${stem}_by_${tgMock.status.bot ?? "bot"}`;
-  const count = tgMock.sets.get(name);
-  if (count == null) throw { code: "set_missing", name } as TgError;
+  const stickers = tgMock.sets.get(name);
+  if (stickers == null) throw { code: "set_missing", name } as TgError;
   const known = tgMock.status.sets.find((s) => s.name === name);
-  return { name, title: known?.title ?? stem, count, kind: known?.kind ?? "stickers" };
+  return { name, title: known?.title ?? stem, count: stickers.length, kind: known?.kind ?? "stickers", stickers: stickers.map((s) => ({ ...s })) };
+}
+
+/** Картинка стикера набора (скачивается из Telegram при первом показе). */
+export async function tgStickerPreview(fileId: string, size: number): Promise<StickerPreview> {
+  if (isTauri()) return tgCall<StickerPreview>("tg_sticker_preview", { fileId, size });
+  await delay(60 + Math.random() * 200);
+  const n = Number(fileId.replace(/\D/g, "")) || 0;
+  const hue = (n * 47) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="hsl(${hue} 70% 55%)"/><text x="50" y="62" font-size="34" text-anchor="middle" fill="#fff" font-family="sans-serif">${n}</text></svg>`;
+  // В демонстрации каждый пятый стикер «тяжёлый» — для обложки не подходит.
+  return { png: `data:image/svg+xml,${encodeURIComponent(svg)}`, bytes: n % 5 === 4 ? 41000 : 9000 + n * 300 };
+}
+
+/** Править набор; ход — через `onProgress`. */
+export async function tgEdit(request: EditRequest, onProgress: (p: PublishProgress) => void): Promise<EditDone> {
+  if (isTauri()) {
+    const channel = new Channel<PublishProgress>();
+    channel.onmessage = onProgress;
+    return tgCall<EditDone>("tg_edit", { request, onProgress: channel });
+  }
+  const set = tgMock.sets.get(request.name);
+  if (!set) throw { code: "set_missing", name: request.name } as TgError;
+  const total = request.delete.length + request.emoji.length + 1 + (request.cover ? 1 : 0);
+  tgMock.stop = false;
+  for (let done = 1; done <= total; done++) {
+    await delay(150);
+    if (tgMock.stop) throw { code: "stopped", done: done - 1 } as TgError;
+    onProgress({ done, total });
+  }
+  const byId = new Map(set.map((s) => [s.fileId, s]));
+  for (const e of request.emoji) {
+    const s = byId.get(e.fileId);
+    if (s) s.emoji = e.emoji[0] ?? s.emoji;
+  }
+  const next = request.order.map((id) => byId.get(id)).filter((s): s is StickerInfo => !!s);
+  tgMock.sets.set(request.name, next);
+  const link = `https://t.me/${request.kind === "emoji" ? "addemoji" : "addstickers"}/${request.name}`;
+  return { name: request.name, link, count: next.length };
 }
 
 /** Выгрузить набор; ход — через `onProgress`. */
@@ -278,8 +320,9 @@ export async function tgPublish(request: PublishRequest, onProgress: (p: Publish
   const total = request.items.length;
   const base = request.appendBase;
   if (base != null && !tgMock.sets.has(name)) throw { code: "set_missing", name } as TgError;
+  const count = () => tgMock.sets.get(name)?.length ?? 0;
   // Сколько файлов задания уже в наборе (продолжение или дописывание).
-  const start = base != null ? (tgMock.sets.get(name) ?? 0) - base : request.resume ? (tgMock.sets.get(name) ?? 0) : 0;
+  const start = base != null ? count() - base : request.resume ? count() : 0;
   if (base == null && !request.resume && tgMock.sets.has(name)) throw { code: "name_taken", name } as TgError;
   tgMock.stop = false;
   for (let done = start + 1; done <= total; done++) {
@@ -296,7 +339,9 @@ export async function tgPublish(request: PublishRequest, onProgress: (p: Publish
     }
     // Демонстрация обрыва: на 24-м при первой попытке.
     if (done === 24 && !request.resume && base == null) throw { code: "network", done: 23, detail: "io" } as TgError;
-    tgMock.sets.set(name, (base ?? 0) + done);
+    const list = tgMock.sets.get(name) ?? [];
+    list.push(mockSticker(request.kind, request.items[done - 1].emoji[0] ?? "⭐"));
+    tgMock.sets.set(name, list);
     onProgress({ done, total });
   }
   tgMock.status = {
@@ -325,12 +370,41 @@ export async function tgOpen(set?: { kind: SetKind; name: string }): Promise<voi
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+let mockFiles = 0;
+const mockSticker = (kind: SetKind, emoji: string): StickerInfo => {
+  const n = ++mockFiles;
+  return { fileId: `file${n}`, fileUniqueId: `u${n}`, emoji, customEmojiId: kind === "emoji" ? `ce${n}` : null, isAnimated: true };
+};
+
 const tgMock = {
   status: { enabled: false, bot: null, owner: null, sets: [] } as TgStatus,
   polls: 0,
   stop: false,
-  sets: new Map<string, number>(),
+  /** Наборы бота: стикеры по порядку. */
+  sets: new Map<string, StickerInfo[]>(),
 };
+
+// `?tg` в браузерном режиме: бот уже подключён, есть два набора — чтобы
+// сразу открыть «Дописать» и окно «Набор».
+if (!isTauri() && !isWeb() && new URLSearchParams(location.search).has("tg")) {
+  const bot = "tea_stickers_bot";
+  const demo: [string, string, SetKind, number][] = [
+    ["Сердечки", "serdechki", "emoji", 12],
+    ["Чайная Аксиома", "chajnaya_aksioma", "stickers", 6],
+  ];
+  tgMock.status = {
+    enabled: true,
+    bot,
+    owner: "@nickname",
+    sets: demo.map(([title, stem, kind]) => ({ name: `${stem}_by_${bot}`, title, kind })),
+  };
+  for (const [, stem, kind, n] of demo) {
+    tgMock.sets.set(
+      `${stem}_by_${bot}`,
+      Array.from({ length: n }, (_, i) => mockSticker(kind, i === 3 ? "😍" : kind === "emoji" ? "❤️" : "🍵")),
+    );
+  }
+}
 
 /** Системный диалог: выбрать SVG-файлы или папку. */
 export async function pickPaths(kind: "files" | "folder"): Promise<string[]> {

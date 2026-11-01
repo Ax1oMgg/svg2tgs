@@ -191,6 +191,30 @@ impl Transport for HttpTransport {
         })?;
         parse(value)
     }
+
+    fn download(&self, file_path: &str) -> Result<Vec<u8>, Failure> {
+        if !crate::api::file_path_is_safe(file_path) {
+            return Err(Failure::Unexpected(format!(
+                "путь файла: {}",
+                snippet(file_path)
+            )));
+        }
+        let url = format!("{}/file/bot{}/{file_path}", self.host, self.token);
+        let resp = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|e| Failure::Network(network_kind(&e).into()))?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            return Err(Failure::Unexpected(format!("HTTP {status}: файл стикера")));
+        }
+        resp.into_body()
+            .with_config()
+            .limit(crate::api::DOWNLOAD_MAX as u64 + 1)
+            .read_to_vec()
+            .map_err(|e| Failure::Network(network_kind(&e).into()))
+    }
 }
 
 /// Вид сетевой ошибки без подробностей (в них может быть адрес с токеном).
@@ -421,6 +445,20 @@ mod tests {
         let err = local(host).call("getMe", vec![]).unwrap_err();
         server.join().unwrap();
         assert!(matches!(err, Failure::Api { code: 401, .. }), "{err:?}");
+    }
+
+    #[test]
+    fn real_client_downloads_files() {
+        let (host, server) = serve_once("200 OK", "TGSDATA");
+        let bytes = local(host).download("stickers/file_1.tgs").unwrap();
+        assert_eq!(bytes, b"TGSDATA");
+        let req = String::from_utf8(server.join().unwrap()).unwrap();
+        assert!(
+            req.starts_with("GET /file/bot123:abc/stickers/file_1.tgs HTTP/1.1"),
+            "{req}"
+        );
+        // Путь не из Telegram — запроса нет.
+        assert!(local(host).download("../x").is_err());
     }
 
     #[test]

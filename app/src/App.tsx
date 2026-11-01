@@ -8,6 +8,7 @@ import { ConflictDialog, type ConflictChoice } from "./components/ConflictDialog
 import { CropEditor } from "./components/CropEditor";
 import { ImportDialog } from "./components/ImportDialog";
 import { PublishDialog, type PublishSource } from "./components/PublishDialog";
+import { SetDialog } from "./components/SetDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast, type ToastData } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
@@ -109,6 +110,9 @@ export function App() {
   // Выгрузка в Telegram: состояние читается без сети.
   const [tg, setTg] = useState<TgStatus>({ enabled: false, bot: null, owner: null, sets: [] });
   const [publishing, setPublishing] = useState<{ source: PublishSource; kind: SetKind } | null>(null);
+  // Окно «Набор в Telegram»: полное имя набора или `null` — выбрать в окне.
+  const [editingSet, setEditingSet] = useState<{ name: string | null } | null>(null);
+  const [setsVersion, setSetsVersion] = useState(0);
   const pasted = useRef(0);
   const t = strings[prefs.lang];
 
@@ -600,6 +604,7 @@ export function App() {
           version={version}
           tg={tg}
           onTg={setTg}
+          onEditSets={() => setEditingSet({ name: null })}
           onApply={(lang, theme, tgEnabled) => {
             patch({ lang, theme });
             if (tgEnabled !== tg.enabled) void backend.tgSetEnabled(tgEnabled).then(setTg);
@@ -636,10 +641,25 @@ export function App() {
           source={publishing.source}
           defaultKind={publishing.kind}
           onToast={(text) => setToast({ text, dismissOnAction: true })}
+          onEditSet={(name) => setEditingSet({ name })}
+          setsVersion={setsVersion}
           onClose={() => {
             setPublishing(null);
             // Выгрузка могла добавить набор в подсказки «Дописать».
             void backend.tgStatus().then(setTg);
+          }}
+        />
+      )}
+
+      {editingSet && tg.bot && (
+        <SetDialog
+          lang={prefs.lang}
+          status={tg}
+          initial={editingSet.name}
+          onToast={(text) => setToast({ text, dismissOnAction: true })}
+          onClose={() => {
+            setEditingSet(null);
+            setSetsVersion((v) => v + 1);
           }}
         />
       )}
