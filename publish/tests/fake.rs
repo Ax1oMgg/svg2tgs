@@ -914,3 +914,45 @@ fn stickers_are_downloaded_by_file_id() {
     assert_eq!(fake.calls("getFile"), 1);
     assert_eq!(fake.calls("download"), 1);
 }
+
+#[test]
+fn single_sticker_makes_and_extends_a_set() {
+    // Набор из одного файла: только создание, без addStickerToSet.
+    let fake = Fake::new();
+    let done = run(
+        &bot(&fake),
+        BOT,
+        OWNER,
+        &job(1, SetKind::Stickers),
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(done.count, 1);
+    assert_eq!(fake.calls("createNewStickerSet"), 1);
+    assert_eq!(fake.calls("addStickerToSet"), 0);
+    // Дописать ещё один.
+    let mut one = job(1, SetKind::Stickers);
+    one.append = Some(1);
+    run(
+        &bot(&fake),
+        BOT,
+        OWNER,
+        &one,
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(fake.set(&done.name).unwrap().len(), 2);
+    // Повтор того же задания (продолжение) ничего не дописывает.
+    run(
+        &bot(&fake),
+        BOT,
+        OWNER,
+        &one,
+        |_| {},
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(fake.set(&done.name).unwrap().len(), 2);
+}

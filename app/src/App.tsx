@@ -462,26 +462,36 @@ export function App() {
       setToast({ text: t.settingsSaved, dismissOnAction: true });
   };
 
-  // «В Telegram»: нарезанный выбранный файл — его клетки (эмодзи),
-  // иначе — все готовые файлы списка по порядку.
+  // Нарезанный выбранный файл — для «В Telegram» его клетки (эмодзи).
   const sliced =
     selected && selected.status !== "error" && selected.outcome && !selected.outcome.error && selected.outcome.grid[0] * selected.outcome.grid[1] > 1
       ? selected
       : null;
-  const ready = items.filter((it) => (it.status === "ok" || it.status === "warn") && it.outcome && !it.outcome.error);
+  const isReady = (it: (typeof items)[number]) => (it.status === "ok" || it.status === "warn") && !!it.outcome && !it.outcome.error;
+  // Выбранные файлы: один (главный) или диапазон из списка.
+  const picked = chosen.length > 1 ? chosen : selected ? [selected] : [];
+  const pickedReady = picked.filter(isReady);
   const connected = !!tg.bot && !!tg.owner;
+  // Выгружается всегда выбранное: один файл (с нарезкой — его эмодзи,
+  // без — один стикер) или выбранный диапазон файлов.
   // Как в программе: кнопки нет, пока выгрузка не включена в «Настройках»;
   // в веб-версии её включить нельзя — кнопки нет совсем.
   const publish = !web && tg.enabled
     ? {
-        title: !connected ? t.tgPublishNoBot : sliced ? t.tgPublishGrid(sliced.name) : t.tgPublishList,
+        title: !connected
+          ? t.tgPublishNoBot
+          : picked.length > 1
+            ? t.tgPublishSelected(pickedReady.length)
+            : sliced
+              ? t.tgPublishGrid(sliced.name)
+              : t.tgPublishOne(selected?.name ?? "…"),
         onClick:
-          connected && (sliced || ready.length > 0)
+          connected && (picked.length > 1 ? pickedReady.length > 0 : !!sliced || pickedReady.length === 1)
             ? () =>
                 setPublishing(
-                  sliced && sliced.outcome
+                  picked.length === 1 && sliced && sliced.outcome
                     ? { source: { kind: "grid", item: sliced, cols: sliced.outcome.grid[0], rows: sliced.outcome.grid[1] }, kind: "emoji" }
-                    : { source: { kind: "list", items: ready }, kind: prefs.previewKind === "emoji" ? "emoji" : "stickers" },
+                    : { source: { kind: "list", items: pickedReady }, kind: prefs.previewKind === "emoji" ? "emoji" : "stickers" },
                 )
             : null,
       }
@@ -518,7 +528,8 @@ export function App() {
       totalCount={items.length}
       exporting={exporting}
       onExport={() => void runExport(items.map((it) => it.id))}
-      onExportOne={selected && selected.status !== "error" ? () => void runExport([selected.id]) : null}
+      // Значок рядом: выбранный файл или выбранный диапазон.
+      onExportOne={picked.some((it) => it.status !== "error") ? () => void runExport(picked.map((it) => it.id)) : null}
       publish={publish}
       onChooseDir={() =>
         void backend

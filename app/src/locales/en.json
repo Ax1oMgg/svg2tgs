@@ -271,7 +271,6 @@
   "tgDisconnectHint": "Forget the token and account",
   "tgPublish": "To Telegram",
   "tgPublishGrid": "Upload to Telegram — emoji from the {name} grid",
-  "tgPublishList": "Upload to Telegram — a set from the files in the list",
   "tgPublishNoBot": "Upload to Telegram: connect a bot in Settings",
   "pubTitle": "Upload to Telegram",
   "pubRunning": "Uploading to Telegram",
@@ -402,5 +401,8 @@
   "tgErr_set_changed": "The set changed since it was opened (stickers added or removed elsewhere). Open it again.",
   "tgErr_thumb_too_big": "The cover is over 32 KB — Telegram won't accept it. Pick a smaller sticker.",
   "tgErr_cover_invalid": "This cover doesn't fit: an emoji set's cover must be one of its emoji.",
-  "tgErr_delete_all": "You can't remove every sticker: Telegram doesn't keep empty sets."
+  "tgErr_delete_all": "You can't remove every sticker: Telegram doesn't keep empty sets.",
+  "exportSelected": "Export selected ({n})",
+  "tgPublishOne": "Upload to Telegram — {name}",
+  "tgPublishSelected": "Upload to Telegram — selected files ({n})"
 }
