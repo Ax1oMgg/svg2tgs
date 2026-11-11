@@ -4,7 +4,7 @@ members = ["core", "trace", "render", "publish", "cli", "web", "app/src-tauri"]
 default-members = ["core", "trace", "render", "publish", "cli"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
