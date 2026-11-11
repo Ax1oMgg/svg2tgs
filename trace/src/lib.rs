@@ -25,8 +25,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use svg2tgs_core::{
-    Conversion, Error, Optimization, Options, PathMode, Tiles, TraceInfo, TracePreset, Warning,
-    WarningCode,
+    Bounds, Conversion, Error, Optimization, Options, PathMode, Tiles, TraceInfo, TracePreset,
+    Warning, WarningCode,
 };
 use visioncortex::PathSimplifyMode;
 
@@ -205,6 +205,34 @@ struct TraceKey {
     /// Пикселей трассировки на пиксель канваса.
     t2c: f32,
     remove_bg: bool,
+    /// Часть картинки, которая трассируется (видимая после обрезки).
+    region: Option<[u32; 4]>,
+}
+
+/// Пиксельная часть картинки `[x0, y0, x1, y1)`, которая видна после
+/// обрезки: прямоугольная окрестность [`svg2tgs_core::crop_outline`].
+/// `None` — видна вся картинка (обрезки нет или она уже не отсекает пиксель).
+fn crop_pixels(outline: Option<[[f32; 2]; 4]>, w: u32, h: u32) -> Option<[u32; 4]> {
+    let outline = outline?;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for [x, y] in outline {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    let px = |v: f32, max: u32| v.clamp(0.0, max as f32) as u32;
+    let r = [
+        px(x0.floor(), w),
+        px(y0.floor(), h),
+        px(x1.ceil(), w),
+        px(y1.ceil(), h),
+    ];
+    if r[2] <= r[0] || r[3] <= r[1] || r == [0, 0, w, h] {
+        None
+    } else {
+        Some(r)
+    }
 }
 
 /// «Детали» → сторона наименьшего пятна (по пресету: в пикселях канваса,
@@ -261,6 +289,15 @@ pub fn convert_grid_limited(
         ],
         _ => [0.0, 0.0, w as f32, h as f32],
     };
+    // Обрезка — до трассировки: трассируем только видимую часть картинки
+    // (при повороте — её прямоугольную окрестность). Документ остаётся
+    // прежнего размера, поэтому координаты и вписывание не меняются.
+    // «По краю» не сокращаем: там рамка рисунка считается по содержимому,
+    // и ядро, увидев только видимую часть, обрезало бы её второй раз.
+    let region = match options.bounds {
+        Bounds::Container => crop_pixels(svg2tgs_core::crop_outline(rect, options), w, h),
+        Bounds::Content => None,
+    };
     let (canvas_scale, grid) = svg2tgs_core::board_scale(rect, options);
     let tiles_n = grid.cols * grid.rows;
     let k = trace
@@ -293,6 +330,7 @@ pub fn convert_grid_limited(
             details_now,
             gradients,
             trace.remove_bg,
+            region,
         );
         let svg = trace_cached(bytes, &p, key, frame, &source)?;
         let last_step = step + 1 == ladder.len();
@@ -394,8 +432,8 @@ fn add_notes(tile: &mut Conversion, notes: &[WarningCode]) {
 
 /// Картинка трассировки и её размещение в документе.
 enum Source {
-    /// Уменьшение по площади до `tw × th`.
-    Area,
+    /// Уменьшение по площади до `tw × th`; `Some` — только видимая часть.
+    Area(Option<[u32; 4]>),
     /// Блоки пиксель-арта.
     Blocks(Blocks),
 }
@@ -410,6 +448,7 @@ fn plan(
     details: u32,
     gradients: bool,
     remove_bg: bool,
+    region: Option<[u32; 4]>,
 ) -> (TraceKey, vectorize::Frame, Source) {
     let (w, h) = (p.img.w, p.img.h);
     let blocks = (preset == TracePreset::Pixel).then_some(p.blocks).flatten();
@@ -427,24 +466,46 @@ fn plan(
             (tw, th, Source::Blocks(b), view)
         }
         None => {
+            // Пиксель-арт режется по блокам, поэтому трассируется целиком;
+            // у остальных видимая часть — только после обрезки.
+            let (rw, rh) = region.map_or((w, h), |r| (r[2] - r[0], r[3] - r[1]));
             // Пикселей трассировки на пиксель картинки.
             let mut s = (k * canvas_scale).min(1.0);
             // Ступенями через √2: ползунки размещения не запускают
             // трассировку на каждом шаге.
             s = 2f64.powf((s.log2() * 2.0).round() / 2.0).min(1.0);
-            let long = w.max(h) as f64;
+            let long = rw.max(rh) as f64;
             s = s.max((MIN_TRACE_SIDE / long).min(1.0));
-            let px = w as f64 * h as f64 * s * s;
+            let px = rw as f64 * rh as f64 * s * s;
             if px > MAX_TRACE_PIXELS as f64 {
                 s *= (MAX_TRACE_PIXELS as f64 / px).sqrt();
             }
-            let tw = ((w as f64 * s).round() as u32).max(1);
-            let th = ((h as f64 * s).round() as u32).max(1);
-            (tw, th, Source::Area, [0.0, 0.0, tw as f64, th as f64])
+            let tw = ((rw as f64 * s).round() as u32).max(1);
+            let th = ((rh as f64 * s).round() as u32).max(1);
+            // Документ — прежняя картинка; viewBox показывает, где на ней
+            // лежит трассированный кусок.
+            let view = match region {
+                Some(r) => {
+                    let (sx, sy) = (tw as f64 / rw as f64, th as f64 / rh as f64);
+                    [
+                        -(r[0] as f64) * sx,
+                        -(r[1] as f64) * sy,
+                        w as f64 * sx,
+                        h as f64 * sy,
+                    ]
+                }
+                None => [0.0, 0.0, tw as f64, th as f64],
+            };
+            (tw, th, Source::Area(region), view)
         }
     };
+    let region = match source {
+        Source::Area(region) => region,
+        Source::Blocks(_) => None,
+    };
+    let (rw, _) = region.map_or((w, h), |r| (r[2] - r[0], r[3] - r[1]));
     // Пикселей трассировки на пиксель канваса.
-    let t2c = (tw as f64 / w as f64 / canvas_scale.max(1e-9)) as f32;
+    let t2c = (tw as f64 / rw as f64 / canvas_scale.max(1e-9)) as f32;
     let side = speckle_side(preset, details);
     let speckle = if preset == TracePreset::Pixel {
         side
@@ -460,6 +521,7 @@ fn plan(
         gradients,
         t2c,
         remove_bg,
+        region,
     };
     let frame = vectorize::Frame {
         view,
@@ -482,7 +544,8 @@ fn trace_cached(
     }
     let work = match source {
         Source::Blocks(b) => p.img.downscale_blocks(b.n, b.ox, b.oy),
-        Source::Area => p.img.resize_area(key.tw, key.th),
+        Source::Area(Some(region)) => p.img.crop(*region).resize_area(key.tw, key.th),
+        Source::Area(None) => p.img.resize_area(key.tw, key.th),
     };
     let params = key.preset.params();
     let smooth = if params.blur > 0 || p.format == Format::Jpeg {
@@ -619,6 +682,84 @@ mod tests {
         // Тот же результат повторно (кэш и постоянный seed).
         let again = convert_grid(&bytes, &Options::default()).unwrap();
         assert_eq!(again.tiles.tiles[0].tgs, t.tiles.tiles[0].tgs);
+    }
+
+    #[test]
+    fn crop_is_traced_before_the_picture() {
+        // Красный круг слева, всё остальное синее; обрезаем левую половину.
+        let side = 400u32;
+        let mut px = Vec::new();
+        for y in 0..side {
+            for x in 0..side {
+                let dx = x as f32 - 100.0;
+                let dy = y as f32 - 200.0;
+                px.push(if dx * dx + dy * dy < 60.0 * 60.0 {
+                    [220, 40, 40, 255]
+                } else {
+                    [30, 90, 220, 255]
+                });
+            }
+        }
+        let bytes = png(&Rgba::new(side, side, px));
+        let whole = convert_grid(&bytes, &Options::default()).unwrap();
+        assert_eq!(whole.info.traced_width, side);
+
+        let cropped = convert_grid(
+            &bytes,
+            &Options {
+                crop: Some(svg2tgs_core::Crop {
+                    left: 0.5,
+                    ..Default::default()
+                }),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        // Документ прежнего размера, трассирована только правая половина
+        // и лежит на своём месте (viewBox сдвинут на её начало).
+        assert_eq!(cropped.info.width, side);
+        assert_eq!(cropped.info.traced_width, side / 2);
+        assert!(
+            cropped.svg.contains(r#"viewBox="-200 0 400 400""#),
+            "{}",
+            &cropped.svg[..200.min(cropped.svg.len())]
+        );
+        assert!(cropped.svg.contains("#1e5adc"), "{}", cropped.svg);
+        assert!(!cropped.svg.contains("#dc2828"), "{}", cropped.svg);
+    }
+
+    #[test]
+    fn content_frame_keeps_the_whole_picture() {
+        // «По краю»: рамка рисунка — по содержимому. Если трассировать только
+        // видимую часть, ядро посчитает рамку по ней и обрежет второй раз.
+        // Поэтому здесь трассируется вся картинка.
+        let side = 400u32;
+        let mut px = Vec::new();
+        for y in 0..side {
+            for x in 0..side {
+                let dx = x as f32 - 100.0;
+                let dy = y as f32 - 200.0;
+                px.push(if dx * dx + dy * dy < 60.0 * 60.0 {
+                    [220, 40, 40, 255]
+                } else {
+                    [30, 90, 220, 255]
+                });
+            }
+        }
+        let bytes = png(&Rgba::new(side, side, px));
+        let t = convert_grid(
+            &bytes,
+            &Options {
+                bounds: svg2tgs_core::Bounds::Content,
+                crop: Some(svg2tgs_core::Crop {
+                    left: 0.5,
+                    ..Default::default()
+                }),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(t.info.traced_width, side);
     }
 
     #[test]

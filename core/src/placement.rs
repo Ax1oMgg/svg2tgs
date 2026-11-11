@@ -166,6 +166,17 @@ fn content_bounds(g: &usvg::Group, m: &Transform, b: &mut [f32; 4]) {
 /// обрезки в получившихся координатах (центр рисунка — начало координат).
 /// `measure` — для «По краю»: рамка самого рисунка после этих шагов.
 fn shape(rect: [f32; 4], options: &Options, measure: Option<&Measure>) -> (Transform, [f32; 4]) {
+    let (shape, _, crop) = shaped(rect, options, measure);
+    (shape, crop)
+}
+
+/// Как [`shape`], но возвращает и рамку рисунка после трансформаций
+/// (до обрезки) — она нужна [`crop_outline`].
+fn shaped(
+    rect: [f32; 4],
+    options: &Options,
+    measure: Option<&Measure>,
+) -> (Transform, [f32; 4], [f32; 4]) {
     let [rx, ry, w, h] = rect;
     let fx = if options.flip_h { -1.0 } else { 1.0 };
     let fy = if options.flip_v { -1.0 } else { 1.0 };
@@ -181,7 +192,7 @@ fn shape(rect: [f32; 4], options: &Options, measure: Option<&Measure>) -> (Trans
         .and_then(|f| f(&shape))
         .unwrap_or_else(|| bounds(&shape.pre_translate(rx, ry), w, h));
     let Some(c) = options.crop else {
-        return (shape, b);
+        return (shape, b, b);
     };
     // Рамка обрезки — от рамки рисунка без поворота, относительно центра.
     let (w0, h0) = (w * k, h);
@@ -207,7 +218,39 @@ fn shape(rect: [f32; 4], options: &Options, measure: Option<&Measure>) -> (Trans
     fit(&mut x0, &mut x1, b[0], b[2], (MIN_KEEP * bw).max(1e-6));
     fit(&mut y0, &mut y1, b[1], b[3], (MIN_KEEP * bh).max(1e-6));
     f = [x0, y0, x1, y1];
-    (shape, f)
+    (shape, b, f)
+}
+
+/// Куда после обрезки попадает рамка рисунка `rect`: четыре угла рамки
+/// обрезки в координатах документа (по часовой от левого верхнего).
+/// `None` — обрезки нет или она не отсекает ничего.
+///
+/// При повороте рамка обрезки стоит на месте, а рисунок под ней
+/// поворачивается, поэтому её углы в координатах рисунка — повёрнутый
+/// прямоугольник. Трассировка берёт его прямоугольную окрестность.
+pub fn crop_outline(rect: [f32; 4], options: &Options) -> Option<[[f32; 2]; 4]> {
+    options.crop?;
+    let (shape, drawing, crop) = shaped(rect, options, None);
+    // Рамка не меньше рисунка — резать нечего.
+    let side = (drawing[2] - drawing[0])
+        .max(drawing[3] - drawing[1])
+        .max(1.0);
+    let eps = side * 1e-4;
+    if crop[0] <= drawing[0] + eps
+        && crop[1] <= drawing[1] + eps
+        && crop[2] >= drawing[2] - eps
+        && crop[3] >= drawing[3] - eps
+    {
+        return None;
+    }
+    let t = shape.invert()?;
+    let point = |x: f32, y: f32| [t.sx * x + t.kx * y + t.tx, t.ky * x + t.sy * y + t.ty];
+    Some([
+        point(crop[0], crop[1]),
+        point(crop[2], crop[1]),
+        point(crop[2], crop[3]),
+        point(crop[0], crop[3]),
+    ])
 }
 
 /// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
@@ -383,6 +426,84 @@ mod tests {
             assert!((x - y).abs() < 1e-4, "{a:?} {b:?}");
         }
         assert!((a[2] - a[0] - 50.0).abs() < 1e-4);
+    }
+
+    fn corners(outline: [[f32; 2]; 4]) -> Vec<(f32, f32)> {
+        outline.iter().map(|p| (p[0], p[1])).collect()
+    }
+
+    #[test]
+    fn crop_outline_is_the_visible_rectangle() {
+        // Правая половина отрезана — видна левая.
+        let o = Options {
+            crop: Some(crate::options::Crop {
+                right: 0.5,
+                ..Default::default()
+            }),
+            ..Options::default()
+        };
+        let out = corners(crop_outline(size(200.0, 100.0), &o).unwrap());
+        assert_eq!(
+            out,
+            vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+        );
+        // Без обрезки и с пустой обрезкой прямоугольник — весь рисунок.
+        assert!(crop_outline(size(200.0, 100.0), &Options::default()).is_none());
+        let empty = Options {
+            crop: Some(crate::options::Crop::default()),
+            ..Options::default()
+        };
+        assert!(crop_outline(size(200.0, 100.0), &empty).is_none());
+    }
+
+    #[test]
+    fn crop_outline_follows_flip() {
+        // Обрезка слева — со стороны, которая после отражения стала левой.
+        let o = Options {
+            flip_h: true,
+            crop: Some(crate::options::Crop {
+                left: 0.25,
+                ..Default::default()
+            }),
+            ..Options::default()
+        };
+        let out = corners(crop_outline(size(200.0, 100.0), &o).unwrap());
+        assert_eq!(
+            out,
+            vec![(150.0, 0.0), (0.0, 0.0), (0.0, 100.0), (150.0, 100.0)]
+        );
+    }
+
+    #[test]
+    fn crop_outline_turns_with_the_picture() {
+        // Рамка обрезки не поворачивается, поэтому в координатах рисунка
+        // она — повёрнутый прямоугольник: стороны сохраняются, а его
+        // окрестность (viewBox трассировки) шире.
+        let turned = Options {
+            rotation: 45.0,
+            crop: Some(crate::options::Crop {
+                left: 0.25,
+                ..Default::default()
+            }),
+            ..Options::default()
+        };
+        let out = corners(crop_outline(size(200.0, 200.0), &turned).unwrap());
+        let side =
+            |a: (f32, f32), b: (f32, f32)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        // Рамка 150 × 200, повёрнутая на 45°, — те же стороны.
+        assert!((side(out[0], out[1]) - 150.0).abs() < 1e-3);
+        assert!((side(out[1], out[2]) - 200.0).abs() < 1e-3);
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (x, y) in out {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+        // Окрестность повёрнутого прямоугольника: (150 + 200) / √2.
+        let wide = (150.0 + 200.0) / 2f32.sqrt();
+        assert!((x1 - x0 - wide).abs() < 1e-2, "{}", x1 - x0);
+        assert!((y1 - y0 - wide).abs() < 1e-2, "{}", y1 - y0);
     }
 
     #[test]
