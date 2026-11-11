@@ -640,6 +640,56 @@ fn transparency_fade_becomes_an_opacity_gradient() {
 }
 
 #[test]
+fn traced_crop_keeps_the_old_result() {
+    // Обрезка до трассировки должна давать тот же видимый результат, что
+    // и прежний путь: трассировка всей картинки, затем обрезка ядром.
+    let (w, h) = (240u32, 240u32);
+    let mut img = svg2tgs_render::Image::new(w, h);
+    let circle = |x: u32, y: u32, cx: f32, cy: f32| {
+        let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+        dx * dx + dy * dy < 35.0 * 35.0
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let c = if circle(x, y, 60.0, 120.0) {
+                [230, 60, 60, 255]
+            } else if circle(x, y, 180.0, 120.0) {
+                [40, 180, 90, 255]
+            } else {
+                [40, 110, 220, 255]
+            };
+            img.rgba[i..i + 4].copy_from_slice(&c);
+        }
+    }
+    let bytes = img.to_png();
+    let options = Options {
+        crop: Some(svg2tgs_core::Crop {
+            left: 0.5,
+            ..Default::default()
+        }),
+        ..Options::default()
+    };
+
+    // Прежний порядок: трассировка всей картинки, потом обрезка ядром.
+    let whole = svg2tgs_trace::convert_grid(&bytes, &Options::default()).unwrap();
+    let old =
+        svg2tgs_core::convert_grid_limited(whole.svg.as_bytes(), &options, 64 * 1024).unwrap();
+    // Новый: обрезка до трассировки.
+    let new = svg2tgs_trace::convert_grid(&bytes, &options).unwrap();
+
+    let old = render_tgs(&old.tiles[0].tgs, SIZE, 0).unwrap();
+    let new = render_tgs(&new.tiles.tiles[0].tgs, SIZE, 0).unwrap();
+    let d = compare(&old, &new);
+    assert!(d.mean < 1.0, "средняя разница {:.2}", d.mean);
+    assert!(
+        d.bad_ratio < 0.01,
+        "заметно отличающихся пикселей {:.2}%",
+        d.bad_ratio * 100.0
+    );
+}
+
+#[test]
 fn traced_grid_tiles_line_up() {
     // Нарезка картинки: клетки вплотную совпадают с картинкой.
     let bytes = std::fs::read(raster_dir().join("gradient-button.png")).unwrap();
