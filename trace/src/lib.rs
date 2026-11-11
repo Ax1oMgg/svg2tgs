@@ -195,6 +195,8 @@ fn resolve(preset: TracePreset, p: &Prepared) -> TracePreset {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TraceKey {
     preset: TracePreset,
+    /// Обрезанная область в исходном растре.
+    crop: [u32; 4],
     /// Размер трассировки.
     tw: u32,
     th: u32,
@@ -231,6 +233,28 @@ const FIT_LADDER: [(f64, f32, f32); 6] = [
     (0.5, 0.35, 3.4),
 ];
 
+/// Часть исходника, которую нужно передать трассировщику. Пиксель-арт
+/// остаётся целым: его блоки должны сохранить исходную сетку.
+fn source_crop(
+    p: &Prepared,
+    rect: [f32; 4],
+    options: &Options,
+    preset: TracePreset,
+) -> [u32; 4] {
+    let full = [0, 0, p.img.w, p.img.h];
+    if preset == TracePreset::Pixel {
+        return full;
+    }
+    let Some(b) = svg2tgs_core::crop_source_bounds(rect, options) else {
+        return full;
+    };
+    let x0 = b[0].floor().clamp(0.0, p.img.w as f32 - 1.0) as u32;
+    let y0 = b[1].floor().clamp(0.0, p.img.h as f32 - 1.0) as u32;
+    let x1 = b[2].ceil().clamp(x0 as f32 + 1.0, p.img.w as f32) as u32;
+    let y1 = b[3].ceil().clamp(y0 as f32 + 1.0, p.img.h as f32) as u32;
+    [x0, y0, x1, y1]
+}
+
 /// Трассирует растр и конвертирует в TGS (с нарезкой, если она включена).
 pub fn convert_grid(bytes: &[u8], options: &Options) -> Result<Traced, Error> {
     convert_grid_limited(bytes, options, options.preset.max_bytes())
@@ -262,6 +286,7 @@ pub fn convert_grid_limited(
         _ => [0.0, 0.0, w as f32, h as f32],
     };
     let (canvas_scale, grid) = svg2tgs_core::board_scale(rect, options);
+    let crop = source_crop(&p, rect, options, preset);
     let tiles_n = grid.cols * grid.rows;
     let k = trace
         .scale
@@ -293,8 +318,9 @@ pub fn convert_grid_limited(
             details_now,
             gradients,
             trace.remove_bg,
+            crop,
         );
-        let svg = trace_cached(bytes, &p, key, frame, &source)?;
+        let svg = trace_cached(bytes, &p, key, frame, &source, crop)?;
         let last_step = step + 1 == ladder.len();
         // До последней ступени — без упрощения контуров ядром: оно —
         // последнее средство.
@@ -410,8 +436,10 @@ fn plan(
     details: u32,
     gradients: bool,
     remove_bg: bool,
+    crop: [u32; 4],
 ) -> (TraceKey, vectorize::Frame, Source) {
     let (w, h) = (p.img.w, p.img.h);
+    let (cw, ch) = (crop[2] - crop[0], crop[3] - crop[1]);
     let blocks = (preset == TracePreset::Pixel).then_some(p.blocks).flatten();
     let (tw, th, source, view) = match blocks {
         Some(b) => {
@@ -427,24 +455,28 @@ fn plan(
             (tw, th, Source::Blocks(b), view)
         }
         None => {
-            // Пикселей трассировки на пиксель картинки.
+            // Масштаб и предел памяти считаются только по видимой части.
             let mut s = (k * canvas_scale).min(1.0);
-            // Ступенями через √2: ползунки размещения не запускают
-            // трассировку на каждом шаге.
             s = 2f64.powf((s.log2() * 2.0).round() / 2.0).min(1.0);
-            let long = w.max(h) as f64;
+            let long = cw.max(ch) as f64;
             s = s.max((MIN_TRACE_SIDE / long).min(1.0));
-            let px = w as f64 * h as f64 * s * s;
+            let px = cw as f64 * ch as f64 * s * s;
             if px > MAX_TRACE_PIXELS as f64 {
                 s *= (MAX_TRACE_PIXELS as f64 / px).sqrt();
             }
-            let tw = ((w as f64 * s).round() as u32).max(1);
-            let th = ((h as f64 * s).round() as u32).max(1);
-            (tw, th, Source::Area, [0.0, 0.0, tw as f64, th as f64])
+            let tw = ((cw as f64 * s).round() as u32).max(1);
+            let th = ((ch as f64 * s).round() as u32).max(1);
+            let view = [
+                crop[0] as f64 * tw as f64 / cw as f64,
+                crop[1] as f64 * th as f64 / ch as f64,
+                tw as f64,
+                th as f64,
+            ];
+            (tw, th, Source::Area, view)
         }
     };
     // Пикселей трассировки на пиксель канваса.
-    let t2c = (tw as f64 / w as f64 / canvas_scale.max(1e-9)) as f32;
+    let t2c = (tw as f64 / cw as f64 / canvas_scale.max(1e-9)) as f32;
     let side = speckle_side(preset, details);
     let speckle = if preset == TracePreset::Pixel {
         side
@@ -453,6 +485,7 @@ fn plan(
     };
     let key = TraceKey {
         preset,
+        crop,
         tw,
         th,
         colors,
@@ -475,6 +508,7 @@ fn trace_cached(
     key: TraceKey,
     frame: vectorize::Frame,
     source: &Source,
+    crop: [u32; 4],
 ) -> Result<Arc<vectorize::Svg>, Error> {
     let ck = (hash_of(bytes), key);
     if let Some(s) = TRACED.lock().unwrap_or_else(|e| e.into_inner()).get(&ck) {
@@ -482,7 +516,7 @@ fn trace_cached(
     }
     let work = match source {
         Source::Blocks(b) => p.img.downscale_blocks(b.n, b.ox, b.oy),
-        Source::Area => p.img.resize_area(key.tw, key.th),
+        Source::Area => p.img.crop(crop).resize_area(key.tw, key.th),
     };
     let params = key.preset.params();
     let smooth = if params.blur > 0 || p.format == Format::Jpeg {
@@ -660,6 +694,38 @@ mod tests {
         assert_eq!(t.info.preset, TracePreset::Pixel);
         assert_eq!(t.info.block, 8);
         assert_eq!((t.info.traced_width, t.info.traced_height), (16, 16));
+    }
+
+    #[test]
+    fn cropped_pixels_never_reach_tracing() {
+        let mut px = Vec::new();
+        for _ in 0..64 {
+            for x in 0..128 {
+                px.push(if x < 64 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                });
+            }
+        }
+        let bytes = png(&Rgba::new(128, 64, px));
+        let options = Options {
+            crop: Some(svg2tgs_core::Crop {
+                right: 0.5,
+                ..Default::default()
+            }),
+            trace: svg2tgs_core::Trace {
+                preset: TracePreset::Drawing,
+                colors: Some(2),
+                gradients: Some(false),
+                ..Default::default()
+            },
+            ..Options::default()
+        };
+        let t = convert_grid(&bytes, &options).unwrap();
+        assert!(t.svg.contains("#ff0000"), "{}", t.svg);
+        assert!(!t.svg.contains("#0000ff"), "{}", t.svg);
+        assert!(t.svg.contains(r#"width="128" height="64""#));
     }
 
     #[test]

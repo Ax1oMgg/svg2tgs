@@ -27,7 +27,8 @@ pub use options::{
     ParsedOptions, Preset, MAX_OUTLINE, OPTIONS_FORMAT,
 };
 pub use placement::{
-    board_size, place, place_tree, shaped_aspect, source_rect, tree_aspect, Placement,
+    board_size, crop_source_bounds, place, place_tree, shaped_aspect, source_rect, tree_aspect,
+    Placement,
 };
 
 /// Фон, как его рисовать: заливка и рамка — скруглённые квадраты на весь канвас.

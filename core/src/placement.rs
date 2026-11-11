@@ -210,6 +210,31 @@ fn shape(rect: [f32; 4], options: &Options, measure: Option<&Measure>) -> (Trans
     (shape, f)
 }
 
+/// Прямоугольная окрестность видимой после кадрирования области в координатах
+/// исходного документа. Рамка кадрирования не поворачивается вместе с рисунком,
+/// поэтому после обратного преобразования она может быть повёрнутым прямоугольником.
+pub fn crop_source_bounds(rect: [f32; 4], options: &Options) -> Option<[f32; 4]> {
+    options.crop?;
+    let (shape, crop) = shape(rect, options, None);
+    let det = shape.sx * shape.sy - shape.kx * shape.ky;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for (x, y) in [
+        (crop[0], crop[1]),
+        (crop[2], crop[1]),
+        (crop[2], crop[3]),
+        (crop[0], crop[3]),
+    ] {
+        let (x, y) = (x - shape.tx, y - shape.ty);
+        let px = (shape.sy * x - shape.kx * y) / det;
+        let py = (-shape.ky * x + shape.sx * y) / det;
+        b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)];
+    }
+    Some(b)
+}
+
 /// Размещение рисунка с рамкой `rect` (`[x, y, w, h]`, см. [`source_rect`])
 /// на холсте из `grid` канвасов стороной `tile`.
 pub fn place(rect: [f32; 4], tile: f32, grid: Grid, options: &Options) -> Placement {
@@ -383,6 +408,29 @@ mod tests {
             assert!((x - y).abs() < 1e-4, "{a:?} {b:?}");
         }
         assert!((a[2] - a[0] - 50.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn crop_source_bounds_accounts_for_rotation() {
+        let options = Options {
+            crop: Some(crate::options::Crop {
+                left: 0.25,
+                right: 0.25,
+                ..Default::default()
+            }),
+            ..Options::default()
+        };
+        let b = crop_source_bounds(size(100.0, 100.0), &options).unwrap();
+        assert!(close((b[0], b[1]), (25.0, 0.0)), "{b:?}");
+        assert!(close((b[2], b[3]), (75.0, 100.0)), "{b:?}");
+
+        let turned = Options {
+            rotation: 90.0,
+            ..options
+        };
+        let b = crop_source_bounds(size(100.0, 100.0), &turned).unwrap();
+        assert!(close((b[0], b[1]), (0.0, 25.0)), "{b:?}");
+        assert!(close((b[2], b[3]), (100.0, 75.0)), "{b:?}");
     }
 
     #[test]
